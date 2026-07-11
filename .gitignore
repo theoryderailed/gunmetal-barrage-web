@@ -1,0 +1,17 @@
+node_modules/
+dist/
+build/
+*.local
+.DS_Store
+*.log
+.env
+.env.*
+!.env.example
+.turbo/
+coverage/
+*.db
+*.db-journal
+.vite/
+packages/client/dist/
+packages/server/dist/
+packages/shared/dist/

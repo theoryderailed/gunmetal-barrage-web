@@ -1,0 +1,22 @@
+{
+  "name": "@gunmetal-barrage/client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -p tsconfig.json && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@gunmetal-barrage/shared": "*",
+    "colyseus.js": "^0.15.25",
+    "three": "^0.172.0"
+  },
+  "devDependencies": {
+    "@types/three": "^0.172.0",
+    "typescript": "^5.7.3",
+    "vite": "^6.0.7"
+  }
+}
