@@ -104,11 +104,12 @@ export const WEAPON_POOL: WeaponDef[] = [
   {
     id: "bunker_buster",
     name: "Bunker Buster",
-    summary: "Drill shell: flatter arc, high damage, deep shaft that collapses cover.",
-    howToTest: "Hit a ridge/bunker — tall vertical hole + undercut. Tanks above should drop.",
-    cost: 280,
-    damage: 78,
-    blastRadius: 4.8,
+    summary: "Tight blast, deep drill: collapses cover more than it wipes the map.",
+    howToTest: "Hit a ridge — narrow deep hole + modest undercut. Not a Mini Nuke crater.",
+    cost: 260,
+    damage: 58,
+    // Smaller damage AoE than Howitzer/Ricochet; terrain dig is separate (deep shaft)
+    blastRadius: 3.2,
     projectileCount: 1,
     trajectory: "drill",
     behavior: "drill",

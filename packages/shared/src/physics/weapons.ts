@@ -293,8 +293,8 @@ export function blastsToTerrainOps(
 }
 
 /**
- * Bunker Buster terrain: mouth crater, tall vertical shaft, wide undercut at
- * the bottom so platforms collapse and tanks fall into the hole.
+ * Bunker Buster terrain: narrow mouth, deep vertical shaft, modest undercut.
+ * Deeper than a normal shell of the same blast radius, but not Mini-Nuke wide.
  */
 function drillTerrainOps(blasts: BlastPoint[]) {
   const ops: {
@@ -309,53 +309,45 @@ function drillTerrainOps(blasts: BlastPoint[]) {
   }[] = [];
 
   for (const b of blasts) {
-    const mouthR = Math.max(3.2, b.radius * 1.25);
-    // How deep the shaft digs (world units) — enough to punch through hills/bunkers
-    const depth = Math.max(16, b.radius * 4.2);
-    const shaftRx = Math.max(2.6, b.radius * 0.85);
-    const shaftRz = Math.max(2.2, b.radius * 0.7);
-    const undercutR = Math.max(4.5, b.radius * 1.85);
+    // Tight surface punch (slightly larger than raw blast for dig, not a crater lake)
+    const mouthR = Math.max(2.5, b.radius * 1.05);
+    // Depth stays "above average" even with a small blast radius
+    const depth = Math.max(13, b.radius * 4.6 + 4);
+    const shaftRx = Math.max(1.85, b.radius * 0.72);
+    const shaftRz = Math.max(1.6, b.radius * 0.58);
+    // Undercut enough to drop cover, not erase the hillside
+    const undercutR = Math.max(3.0, b.radius * 1.35);
 
     // 1) Surface mouth — open the roof of cover
     ops.push({
       kind: "sphere",
       x: b.x,
-      y: b.y - mouthR * 0.15,
+      y: b.y - mouthR * 0.12,
       z: b.z,
       radius: mouthR,
       material: VoxelMaterial.Air,
     });
 
-    // 2) Deep vertical shaft (tall ellipsoid centered below impact)
-    const shaftCy = b.y - depth * 0.52;
+    // 2) Deep vertical shaft (tall, relatively thin ellipsoid)
+    const shaftCy = b.y - depth * 0.5;
     ops.push({
       kind: "ellipsoid",
       x: b.x,
       y: shaftCy,
       z: b.z,
       radius: shaftRx,
-      radiusY: depth * 0.55,
+      radiusY: depth * 0.52,
       radiusZ: shaftRz,
       material: VoxelMaterial.Air,
     });
 
-    // 3) Bottom undercut — hollow the footing so the ledge collapses
+    // 3) Bottom undercut — hollow footing so the ledge can drop
     ops.push({
       kind: "sphere",
       x: b.x,
-      y: b.y - depth + undercutR * 0.35,
+      y: b.y - depth + undercutR * 0.3,
       z: b.z,
       radius: undercutR,
-      material: VoxelMaterial.Air,
-    });
-
-    // 4) Mid-shaft flare — wider chamber so drop space is clear
-    ops.push({
-      kind: "sphere",
-      x: b.x,
-      y: b.y - depth * 0.55,
-      z: b.z,
-      radius: Math.max(3.4, b.radius * 1.15),
       material: VoxelMaterial.Air,
     });
   }
