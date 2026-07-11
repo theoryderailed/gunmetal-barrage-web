@@ -84,11 +84,13 @@ export class VoxelWorld {
    * Returns the Y a tank should rest at, or -1 if no ground.
    */
   sampleGroundY(x: number, z: number, hover = 1.05): number {
-    const z0 = Math.floor(z);
+    const z0 = Math.max(0, Math.min(this.depth - 1, Math.floor(z)));
     const x0 = Math.floor(x);
     const fx = x - x0; // 0..1 across column
-    const h0 = this.surfaceY(x0, z0);
-    const h1 = this.surfaceY(x0 + 1, z0);
+    // Prefer play-plane surface; if that column is empty, scan nearby Z so a
+    // rare partial column doesn't leave the tank floating/stuck.
+    const h0 = this.surfaceYPrefer(x0, z0);
+    const h1 = this.surfaceYPrefer(x0 + 1, z0);
     if (h0 < 0 && h1 < 0) return -1;
     const left = h0 < 0 ? h1 : h0;
     const right = h1 < 0 ? h0 : h1;
@@ -97,8 +99,27 @@ export class VoxelWorld {
     return top + (hover - 1); // hover 1.05 → sit just above top face
   }
 
+  /** Surface at z, or nearest non-empty Z column (for robust 2.5D footing). */
+  private surfaceYPrefer(x: number, z: number): number {
+    if (x < 0 || x >= this.width) return -1;
+    const primary = this.surfaceY(x, z);
+    if (primary >= 0) return primary;
+    for (let d = 1; d <= 3; d++) {
+      if (z - d >= 0) {
+        const h = this.surfaceY(x, z - d);
+        if (h >= 0) return h;
+      }
+      if (z + d < this.depth) {
+        const h = this.surfaceY(x, z + d);
+        if (h >= 0) return h;
+      }
+    }
+    return -1;
+  }
+
   /**
    * Carve or fill a sphere. Returns list of dirty chunk keys "cx,cy,cz".
+   * Air carves default to full map depth (2.5D play plane — see stampEllipsoid).
    */
   stampSphere(
     cx: number,
@@ -121,7 +142,12 @@ export class VoxelWorld {
   }
 
   /**
-   * Carve or fill an axis-aligned ellipsoid (used for deep drill shafts).
+   * Carve or fill an axis-aligned ellipsoid.
+   *
+   * **Air / destruction:** by default carves the full Z depth for every (x,y)
+   * in the 2D ellipse. The arena is 2.5D — tanks only sample the mid plane, so
+   * partial-depth spheres left "walls between depths" that snagged movement.
+   * Pass `fullDepth: false` for true 3D stamps (props, etc.).
    */
   stampEllipsoid(
     cx: number,
@@ -132,6 +158,7 @@ export class VoxelWorld {
     radiusZ: number,
     material: VoxelMaterial,
     onlyDestructible = true,
+    opts?: { fullDepth?: boolean },
   ): Set<string> {
     const dirty = new Set<string>();
     const rx = Math.max(0.5, radiusX);
@@ -143,6 +170,32 @@ export class VoxelWorld {
     const invRx2 = 1 / (rx * rx);
     const invRy2 = 1 / (ry * ry);
     const invRz2 = 1 / (rz * rz);
+    // Default: full-depth air carve for consistent 2.5D surfaces
+    const fullDepth =
+      opts?.fullDepth ?? material === VoxelMaterial.Air;
+
+    if (fullDepth) {
+      for (let y = cy - iy; y <= cy + iy; y++) {
+        for (let x = cx - ix; x <= cx + ix; x++) {
+          if (x < 0 || x >= this.width || y < 0 || y >= this.height) continue;
+          const dx = x - cx;
+          const dy = y - cy;
+          // 2D ellipse in X–Y (play plane); ignore Z so every depth matches
+          if (dx * dx * invRx2 + dy * dy * invRy2 > 1) continue;
+          for (let z = 0; z < this.depth; z++) {
+            const current = this.get(x, y, z);
+            if (material === VoxelMaterial.Air) {
+              if (onlyDestructible && !isDestructible(current)) continue;
+              if (current === VoxelMaterial.Air) continue;
+            }
+            this.set(x, y, z, material);
+            dirty.add(chunkKey(x, y, z));
+          }
+        }
+      }
+      return dirty;
+    }
+
     for (let y = cy - iy; y <= cy + iy; y++) {
       for (let z = cz - iz; z <= cz + iz; z++) {
         for (let x = cx - ix; x <= cx + ix; x++) {

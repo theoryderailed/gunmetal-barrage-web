@@ -58,13 +58,23 @@ export function moveAlongTerrain(
     }
 
     const rise = ground - cy;
-    // Climb budget proportional to horizontal step
-    if (rise > maxClimb * step + 0.35) {
+    // Gentle slopes: normal climb budget
+    // After blasts, crater lips are steeper — allow short step-ups so tanks
+    // don't get permanently trapped by a 1–2 voxel ledge between depths/columns.
+    const softStep = maxClimb * step + 0.35;
+    if (rise > softStep) {
+      if (rise <= 2.25) {
+        // Step onto the ledge over one frame
+        cx = nx;
+        cy = ground;
+        traveled += step;
+        remaining -= step;
+        continue;
+      }
       blocked = true;
       break;
     }
 
-    // Soft slope: still allow but cap extreme one-frame pops (safety)
     cx = nx;
     cy = ground;
     traveled += step;
