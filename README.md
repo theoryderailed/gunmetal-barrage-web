@@ -2,6 +2,10 @@
 
 Turn-based 3D artillery (Gunbound / Worms inspired) with **destructible voxel terrain**, **procedural maps & loadouts**, and **online public/private lobbies**.
 
+## Play
+
+**Live:** [https://gunmetal-barrageserver-production.up.railway.app/](https://gunmetal-barrageserver-production.up.railway.app/)
+
 ## Stack
 
 | Layer | Tech |
@@ -62,6 +66,8 @@ npm run dev:client   # terminal 2 — http://localhost:5173
 | `npm run typecheck` | Typecheck all workspaces |
 
 ## Deploy (Railway)
+
+**Production:** [https://gunmetal-barrageserver-production.up.railway.app/](https://gunmetal-barrageserver-production.up.railway.app/)
 
 One Railway service runs **Colyseus + Express + the built client** on the same origin (`https` / `wss`). That avoids CORS and mixed-content issues.
 
