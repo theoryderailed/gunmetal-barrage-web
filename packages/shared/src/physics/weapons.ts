@@ -223,13 +223,24 @@ export function resolveBlastDamage(
   return totals;
 }
 
+/**
+ * Terrain craters are intentionally larger than damage radius so maps
+ * reshape more like classic artillery (Worms / Gunbound).
+ */
+export const TERRAIN_BLAST_SCALE = 1.45;
+
 export function blastsToTerrainOps(blasts: BlastPoint[]) {
-  return blasts.map((b) => ({
-    kind: "sphere" as const,
-    x: b.x,
-    y: b.y,
-    z: b.z,
-    radius: b.radius,
-    material: VoxelMaterial.Air,
-  }));
+  return blasts.map((b) => {
+    const radius = Math.max(2.2, b.radius * TERRAIN_BLAST_SCALE);
+    // Sink the stamp slightly so more ground under the impact is scooped out
+    const dig = radius * 0.22;
+    return {
+      kind: "sphere" as const,
+      x: b.x,
+      y: b.y - dig,
+      z: b.z,
+      radius,
+      material: VoxelMaterial.Air,
+    };
+  });
 }
