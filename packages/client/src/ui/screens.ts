@@ -28,45 +28,87 @@ export function renderMenu(
 ): void {
   root.innerHTML = `
     <div class="screen live-bg">
-      <div class="panel live-panel">
-        <h1>GUN METAL BARRAGE</h1>
-        <p class="tagline">Procedural artillery · random biomes · questionable life choices</p>
-        <p class="help menu-tip"><kbd>Q</kbd>/<kbd>E</kbd> power · <kbd>SPACE</kbd> fire · A/D move · W/S angle · watch debris for wind</p>
-        <div class="row">
-          <label>Callsign</label>
-          <input id="name-input" type="text" maxlength="20" value="${escapeHtml(opts.name)}" />
+      <div class="panel live-panel menu-panel">
+        <header class="menu-hero">
+          <div class="menu-badge">ONLINE · DESTRUCTIBLE TERRAIN</div>
+          <h1 class="menu-title">
+            <span class="menu-title-line">GUN METAL</span>
+            <span class="menu-title-line accent">BARRAGE</span>
+          </h1>
+          <p class="tagline">Procedural artillery · random biomes · questionable life choices</p>
+          <div class="menu-keys">
+            <span><kbd>Q</kbd><kbd>E</kbd> power</span>
+            <span><kbd>SPACE</kbd> fire</span>
+            <span><kbd>A</kbd><kbd>D</kbd> move</span>
+            <span><kbd>W</kbd><kbd>S</kbd> angle</span>
+          </div>
+        </header>
+
+        <div class="menu-grid">
+          <section class="menu-card menu-card-callsign">
+            <h3 class="menu-card-title">Your callsign</h3>
+            <div class="callsign-row">
+              <input id="name-input" type="text" maxlength="20" value="${escapeHtml(opts.name)}" placeholder="Commander" autocomplete="nickname" />
+            </div>
+          </section>
+
+          <section class="menu-card menu-card-play">
+            <h3 class="menu-card-title">Deploy</h3>
+            <div class="menu-actions">
+              <button id="btn-public" class="btn-wide">Public Match</button>
+              <div class="menu-actions-split">
+                <button id="btn-private" class="secondary">Private</button>
+                <button id="btn-sandbox" class="secondary">Sandbox</button>
+              </div>
+            </div>
+          </section>
+
+          <section class="menu-card menu-card-join">
+            <h3 class="menu-card-title">Join with code</h3>
+            <div class="join-code-form">
+              <input id="join-code" type="text" maxlength="8" placeholder="ABCD12" spellcheck="false" />
+              <button id="btn-join-code" class="secondary">Join</button>
+            </div>
+          </section>
+
+          <section class="menu-card menu-card-rooms">
+            <div class="menu-card-head">
+              <h3 class="menu-card-title">Public rooms</h3>
+              <div class="menu-card-tools">
+                <button id="btn-refresh" class="secondary btn-tiny">Refresh</button>
+                <button id="btn-lb" class="secondary btn-tiny">Ranks</button>
+              </div>
+            </div>
+            <ul class="room-list" id="room-list">
+              ${
+                opts.rooms.length === 0
+                  ? `<li class="room-empty">
+                      <span class="room-empty-icon">◈</span>
+                      <span class="room-empty-title">No open rooms</span>
+                      <span class="room-empty-sub">Host a public match or join with a code</span>
+                    </li>`
+                  : opts.rooms
+                      .map(
+                        (r) => `
+                  <li class="room-item">
+                    <div class="room-meta">
+                      <span class="room-title">${escapeHtml(r.title)}</span>
+                      <span class="room-slots">${r.players}<span class="room-slots-sep">/</span>${r.maxPlayers} pilots</span>
+                    </div>
+                    <button data-join="${r.roomId}" class="btn-join-room">Join</button>
+                  </li>`,
+                      )
+                      .join("")
+              }
+            </ul>
+          </section>
         </div>
-        <div class="row">
-          <button id="btn-public">Public Match</button>
-          <button id="btn-private" class="secondary">Private Match</button>
-          <button id="btn-sandbox" class="secondary">Sandbox</button>
-        </div>
-        <div class="row">
-          <input id="join-code" type="text" maxlength="8" placeholder="JOIN CODE" />
-          <button id="btn-join-code" class="secondary">Join Code</button>
-        </div>
-        <h2>Public Rooms</h2>
-        <ul class="room-list" id="room-list">
-          ${
-            opts.rooms.length === 0
-              ? `<li><span>No open rooms</span></li>`
-              : opts.rooms
-                  .map(
-                    (r) => `
-              <li>
-                <span>${escapeHtml(r.title)} (${r.players}/${r.maxPlayers})</span>
-                <button data-join="${r.roomId}">Join</button>
-              </li>`,
-                  )
-                  .join("")
-          }
-        </ul>
-        <div class="row">
-          <button id="btn-refresh" class="secondary">Refresh</button>
-          <button id="btn-lb" class="secondary">Leaderboard</button>
-        </div>
-        <p class="help">Sandbox: keys 1–7 pick weapons · [ ] cycle · test each behavior</p>
-        <p class="help">A/D move · W/S angle · Q/E power · SPACE fire · F facing</p>
+
+        <footer class="menu-footer">
+          <span>Sandbox · keys 1–7 weapons · [ ] cycle</span>
+          <span class="menu-footer-dot">·</span>
+          <span>F flip facing · P pass turn</span>
+        </footer>
       </div>
     </div>
   `;
@@ -108,55 +150,71 @@ export function renderLobby(
   const allReady =
     opts.players.length >= 1 &&
     opts.players.every((p) => p.ready || p.isBot);
+  const readyCount = opts.players.filter((p) => p.ready || p.isBot).length;
+  const total = opts.players.length;
   root.innerHTML = `
     <div class="screen live-bg">
       <div class="panel live-panel lobby-panel">
-        <h1>${escapeHtml(opts.title)}</h1>
-        <h2>${opts.isPrivate ? "Private match" : "Public lobby"}</h2>
-        <p class="lobby-live-hint">Live range in the background — get ready while the shells fly</p>
-        ${
-          opts.isPrivate
-            ? `<div class="join-code-row">
-                <span class="join-code-label">JOIN CODE</span>
-                <code class="join-code">${escapeHtml(opts.joinCode)}</code>
-                <button type="button" id="btn-copy-code" class="secondary">Copy</button>
-              </div>`
-            : ""
-        }
-        <ul class="room-list pilot-list">
+        <header class="lobby-hero">
+          <div class="lobby-badge">${opts.isPrivate ? "PRIVATE LOBBY" : "PUBLIC LOBBY"}</div>
+          <h1 class="lobby-title">${escapeHtml(opts.title)}</h1>
+          <p class="lobby-live-hint">Live range behind you — ready up while the shells fly</p>
+          ${
+            opts.isPrivate
+              ? `<div class="join-code-plaque">
+                  <span class="join-code-label">Share code</span>
+                  <code class="join-code">${escapeHtml(opts.joinCode)}</code>
+                  <button type="button" id="btn-copy-code" class="secondary btn-tiny">Copy</button>
+                </div>`
+              : ""
+          }
+          <div class="lobby-ready-meter" title="${readyCount}/${total} ready">
+            <div class="lobby-ready-bar"><i style="width:${total ? (readyCount / total) * 100 : 0}%"></i></div>
+            <span class="lobby-ready-label">${readyCount} / ${total} ready</span>
+          </div>
+        </header>
+
+        <div class="pilot-grid">
           ${opts.players
             .map((p) => {
               const persona = p.persona
                 ? personaLabel(p.persona as import("@gunmetal-barrage/shared").BotPersona)
                 : null;
               return `
-            <li class="pilot-row ${p.isBot ? "bot" : "human"}">
-              <div class="pilot-main">
-                <span class="pilot-name">${escapeHtml(p.name)}${p.isHost ? " ★" : ""}</span>
-                ${
-                  p.isBot
-                    ? `<span class="pilot-tag">BOT · ${escapeHtml(persona ?? "AI")}</span>`
-                    : `<span class="pilot-tag human-tag">HUMAN</span>`
-                }
-                ${p.title ? `<span class="pilot-title">${escapeHtml(p.title)}</span>` : ""}
-                ${p.motto ? `<span class="pilot-motto">"${escapeHtml(p.motto)}"</span>` : ""}
+            <article class="pilot-card ${p.isBot ? "bot" : "human"} ${p.ready ? "is-ready" : ""}">
+              <div class="pilot-card-top">
+                <span class="pilot-avatar">${p.isBot ? "◆" : "●"}</span>
+                <span class="pilot-ready-chip ${p.ready ? "on" : ""}">${p.ready ? "READY" : "WAIT"}</span>
               </div>
-              <span class="pilot-ready">${p.ready ? "READY" : "…"}</span>
-            </li>`;
+              <div class="pilot-name">${escapeHtml(p.name)}${p.isHost ? " <span class=\"host-star\" title=\"Host\">★</span>" : ""}</div>
+              ${
+                p.isBot
+                  ? `<span class="pilot-tag">BOT · ${escapeHtml(persona ?? "AI")}</span>`
+                  : `<span class="pilot-tag human-tag">HUMAN</span>`
+              }
+              ${p.title ? `<span class="pilot-title">${escapeHtml(p.title)}</span>` : ""}
+              ${p.motto ? `<span class="pilot-motto">"${escapeHtml(p.motto)}"</span>` : ""}
+            </article>`;
             })
             .join("")}
-        </ul>
-        <div class="row">
-          <button id="btn-ready" class="${opts.ready ? "good" : ""}">${opts.ready ? "Unready" : "Ready"}</button>
-          ${opts.isHost ? `<button id="btn-bot" class="secondary">Add Bot</button>` : ""}
+          ${
+            opts.players.length === 0
+              ? `<div class="pilot-empty">Waiting for pilots…</div>`
+              : ""
+          }
+        </div>
+
+        <div class="lobby-actions">
+          <button id="btn-ready" class="${opts.ready ? "good" : "btn-wide"}">${opts.ready ? "Unready" : "Ready up"}</button>
+          ${opts.isHost ? `<button id="btn-bot" class="secondary">+ Bot</button>` : ""}
           ${
             opts.isHost
-              ? `<button id="btn-start" class="good" ${allReady ? "" : "disabled"} title="${allReady ? "Start match" : "Everyone must ready"}">Start</button>`
+              ? `<button id="btn-start" class="good btn-start" ${allReady ? "" : "disabled"} title="${allReady ? "Start match" : "Everyone must ready"}">Start match</button>`
               : ""
           }
           <button id="btn-leave" class="secondary">Leave</button>
         </div>
-        <p class="help">${
+        <p class="lobby-help">${
           opts.isHost
             ? allReady
               ? "All set — hit Start when ready."
