@@ -354,16 +354,29 @@ export class MatchSimulation {
       chassisSize: p.loadout.chassis.size,
     });
 
-    const allOps: TerrainOp[] = blastsToTerrainOps(fired.blasts);
+    const allOps: TerrainOp[] = blastsToTerrainOps(fired.blasts, weapon);
     for (const op of allOps) {
-      this.world.stampSphere(
-        Math.round(op.x),
-        Math.round(op.y),
-        Math.round(op.z),
-        op.radius,
-        VoxelMaterial.Air,
-        true,
-      );
+      if (op.kind === "ellipsoid") {
+        this.world.stampEllipsoid(
+          Math.round(op.x),
+          Math.round(op.y),
+          Math.round(op.z),
+          op.radius,
+          op.radiusY ?? op.radius,
+          op.radiusZ ?? op.radius,
+          VoxelMaterial.Air,
+          true,
+        );
+      } else {
+        this.world.stampSphere(
+          Math.round(op.x),
+          Math.round(op.y),
+          Math.round(op.z),
+          op.radius,
+          VoxelMaterial.Air,
+          true,
+        );
+      }
       this.terrainOps.push(op);
     }
 

@@ -400,7 +400,7 @@ function formatBehavior(w: {
     case "lob":
       return "BEHAVIOR: high lob → 1 blast";
     case "drill":
-      return "BEHAVIOR: low-G drill → 1 blast";
+      return "BEHAVIOR: low-G drill → deep shaft + undercut";
     case "bounce":
       return "BEHAVIOR: bounce ×2 → blast";
     case "cluster":

@@ -108,17 +108,51 @@ export class VoxelWorld {
     material: VoxelMaterial,
     onlyDestructible = true,
   ): Set<string> {
+    return this.stampEllipsoid(
+      cx,
+      cy,
+      cz,
+      radius,
+      radius,
+      radius,
+      material,
+      onlyDestructible,
+    );
+  }
+
+  /**
+   * Carve or fill an axis-aligned ellipsoid (used for deep drill shafts).
+   */
+  stampEllipsoid(
+    cx: number,
+    cy: number,
+    cz: number,
+    radiusX: number,
+    radiusY: number,
+    radiusZ: number,
+    material: VoxelMaterial,
+    onlyDestructible = true,
+  ): Set<string> {
     const dirty = new Set<string>();
-    const r = Math.ceil(radius);
-    const r2 = radius * radius;
-    for (let y = cy - r; y <= cy + r; y++) {
-      for (let z = cz - r; z <= cz + r; z++) {
-        for (let x = cx - r; x <= cx + r; x++) {
+    const rx = Math.max(0.5, radiusX);
+    const ry = Math.max(0.5, radiusY);
+    const rz = Math.max(0.5, radiusZ);
+    const ix = Math.ceil(rx);
+    const iy = Math.ceil(ry);
+    const iz = Math.ceil(rz);
+    const invRx2 = 1 / (rx * rx);
+    const invRy2 = 1 / (ry * ry);
+    const invRz2 = 1 / (rz * rz);
+    for (let y = cy - iy; y <= cy + iy; y++) {
+      for (let z = cz - iz; z <= cz + iz; z++) {
+        for (let x = cx - ix; x <= cx + ix; x++) {
           if (!this.inBounds(x, y, z)) continue;
           const dx = x - cx;
           const dy = y - cy;
           const dz = z - cz;
-          if (dx * dx + dy * dy + dz * dz > r2) continue;
+          if (dx * dx * invRx2 + dy * dy * invRy2 + dz * dz * invRz2 > 1) {
+            continue;
+          }
           const current = this.get(x, y, z);
           if (material === VoxelMaterial.Air) {
             if (onlyDestructible && !isDestructible(current)) continue;

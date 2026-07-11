@@ -105,11 +105,11 @@ export const WEAPON_POOL: WeaponDef[] = [
   {
     id: "bunker_buster",
     name: "Bunker Buster",
-    summary: "Drill shell: slightly flatter arc, high damage, solid crater.",
-    howToTest: "Same aim as Peashooter lands a bit farther / flatter — not map-spanning. Big dmg, deep blast.",
+    summary: "Drill shell: flatter arc, high damage, deep shaft that collapses cover.",
+    howToTest: "Hit a ridge/bunker — tall vertical hole + undercut. Tanks above should drop.",
     cost: 280,
-    damage: 70,
-    blastRadius: 4.2,
+    damage: 78,
+    blastRadius: 4.8,
     projectileCount: 1,
     trajectory: "drill",
     behavior: "drill",
@@ -216,7 +216,7 @@ export function formatWeaponBehavior(w: WeaponDef): string {
     case "lob":
       return "1 high-arc shell → 1 blast";
     case "drill":
-      return "1 flatter shell → 1 tight blast";
+      return "1 flatter shell → deep shaft + undercut (drop cover)";
     case "bounce":
       return "1 shell, up to 2 bounces → blast";
     case "cluster":

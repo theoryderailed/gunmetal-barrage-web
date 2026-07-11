@@ -1,6 +1,5 @@
 import {
   DEFAULT_MATCH_CONFIG,
-  VoxelMaterial,
   WEAPON_POOL,
   clampAngle,
   clampPower,
@@ -15,6 +14,7 @@ import {
   fuelCostPerUnit,
   moveAlongTerrain,
   moveSpeed,
+  blastsToTerrainOps,
   resolveBlastDamage,
   simulateWeaponFire,
   type MatchResultEntry,
@@ -646,17 +646,12 @@ function updateAmbient(dt: number, now: number): void {
       if (!ambientActive) return;
       if (fired.blasts.length) {
         sfx.impact(fired.blasts.some((b) => b.radius >= 4.5));
-        renderer.applyTerrainOps(
-          fired.blasts.map((b) => ({
-            kind: "sphere" as const,
-            x: b.x,
-            y: b.y,
-            z: b.z,
-            radius: b.radius * 0.85,
-            material: VoxelMaterial.Air,
-          })),
-          weapon,
+        const ops = blastsToTerrainOps(fired.blasts, weapon).map((op) =>
+          op.kind === "ellipsoid"
+            ? op
+            : { ...op, radius: op.radius * 0.85 },
         );
+        renderer.applyTerrainOps(ops, weapon);
       }
       // Light vanity damage / flash
       for (const t of players) {
@@ -1105,18 +1100,8 @@ function fireSandbox(me: PlayerState): void {
       }
 
       sfx.impact(fired.blasts.some((b) => b.radius >= 4.5));
-      // Single terrain batch so multi-blast VFX stagger correctly
-      renderer.applyTerrainOps(
-        fired.blasts.map((b) => ({
-          kind: "sphere" as const,
-          x: b.x,
-          y: b.y,
-          z: b.z,
-          radius: b.radius,
-          material: VoxelMaterial.Air,
-        })),
-        weapon,
-      );
+      // Same terrain stamps as the server (drill gets deep shaft + undercut)
+      renderer.applyTerrainOps(blastsToTerrainOps(fired.blasts, weapon), weapon);
 
       const damageByTarget = resolveBlastDamage(
         weapon,

@@ -386,14 +386,26 @@ export class GameRenderer {
     if (!this.world || ops.length === 0) return;
     const dirty = new Set<string>();
     for (const op of ops) {
-      const keys = this.world.stampSphere(
-        Math.round(op.x),
-        Math.round(op.y),
-        Math.round(op.z),
-        op.radius,
-        op.material ?? VoxelMaterial.Air,
-        true,
-      );
+      const keys =
+        op.kind === "ellipsoid"
+          ? this.world.stampEllipsoid(
+              Math.round(op.x),
+              Math.round(op.y),
+              Math.round(op.z),
+              op.radius,
+              op.radiusY ?? op.radius,
+              op.radiusZ ?? op.radius,
+              op.material ?? VoxelMaterial.Air,
+              true,
+            )
+          : this.world.stampSphere(
+              Math.round(op.x),
+              Math.round(op.y),
+              Math.round(op.z),
+              op.radius,
+              op.material ?? VoxelMaterial.Air,
+              true,
+            );
       for (const k of keys) dirty.add(k);
       for (const k of keys) {
         const [cx, cy, cz] = k.split(",").map(Number);
@@ -410,8 +422,12 @@ export class GameRenderer {
 
     const style = shellStyleFor(weapon);
     const color = weapon?.color ?? 0xff8844;
-    const stagger = style === "scatter" || style === "triple" ? 85 : 0;
-    ops.forEach((op, i) => {
+    // Drill stacks several stamps — only VFX the mouth + a couple punches
+    const vfxOps =
+      style === "drill" ? ops.filter((_, i) => i === 0 || i === ops.length - 1 || i === 1) : ops;
+    const stagger =
+      style === "scatter" || style === "triple" ? 85 : style === "drill" ? 60 : 0;
+    vfxOps.forEach((op, i) => {
       window.setTimeout(() => {
         this.spawnExplosion(op, color, style);
       }, i * stagger);
