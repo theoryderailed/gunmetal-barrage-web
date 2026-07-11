@@ -78,8 +78,7 @@ One Railway service runs **Colyseus + Express + the built client** on the same o
    - **Healthcheck:** `GET /health`
 6. Deploy. Open the public URL — the game UI and WebSocket share the same host.
 
-**Do not** set Root Directory to `packages/client` or `packages/server` — workspace packages need the monorepo root install.  
-**Vercel** will fail for this repo (no Node/Colyseus runtime). Disconnect Vercel or ignore those checks; Railway is the intended host.
+**Do not** set Root Directory to `packages/client` or `packages/server` — workspace packages need the monorepo root install.
 
 ### Environment
 
@@ -103,7 +102,6 @@ npm start
 ### Notes
 
 - **SQLite** (`better-sqlite3`) lives on the container filesystem. Ephemeral disks lose leaderboard data on redeploy/restart unless you attach a Railway volume to the data path.
-- **Vercel / static hosts** can serve only the client; multiplayer still needs this Node process (or another host) for Colyseus.
 - Shared hosting (e.g. Hostinger shared) will not run the game server; a **VPS** can if you install Node 20+ and reverse-proxy WebSockets.
 
 ## License
