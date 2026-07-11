@@ -53,7 +53,8 @@ export type TrajectoryType =
   | "lob"
   | "drill"
   | "bounce"
-  | "cluster";
+  | "cluster"
+  | "homing";
 
 /** Human-readable trajectory family for HUD / testing. */
 export type WeaponBehavior =
@@ -62,7 +63,9 @@ export type WeaponBehavior =
   | "cluster"
   | "bounce"
   | "drill"
-  | "lob";
+  | "lob"
+  | "homing"
+  | "special";
 
 export interface WeaponDef {
   id: string;
@@ -83,8 +86,11 @@ export interface WeaponDef {
   weight: number;
   /** Shell / VFX tint 0xRRGGBB */
   color: number;
+  /**
+   * Only equipped as secondary (one-shot specials). Never rolled as primary.
+   */
+  secondaryOnly?: boolean;
 }
-
 export interface ChassisDef {
   id: string;
   name: string;

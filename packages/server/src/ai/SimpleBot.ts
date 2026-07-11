@@ -110,6 +110,13 @@ function pickWeapon(
 ): "primary" | "secondary" {
   if (!self.loadout?.secondary || self.secondaryAmmo <= 0) return "primary";
   const sec = self.loadout.secondary;
+  // One-shot specials (Mini Nuke): use when it could decide the fight
+  if (sec.secondaryOnly || sec.id === "nuke_lite") {
+    const hpRatio = self.hp / Math.max(1, self.loadout.chassis.maxHp);
+    if (persona === "reckless") return Math.random() < 0.65 ? "secondary" : "primary";
+    if (hpRatio < 0.4) return Math.random() < 0.7 ? "secondary" : "primary";
+    return Math.random() < 0.25 ? "secondary" : "primary";
+  }
   // Prefer secondary when it matches persona fantasy
   if (persona === "reckless" && sec.blastRadius >= 4 && self.secondaryAmmo > 0) {
     return Math.random() < 0.55 ? "secondary" : "primary";

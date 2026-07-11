@@ -4,6 +4,7 @@ import {
   computeDamage,
   muzzleOrigin,
   simulateBallistic,
+  simulateHoming,
   type ImpactResult,
 } from "./ballistics.js";
 
@@ -26,6 +27,8 @@ export interface WeaponFireInput {
   power: number;
   wind: number;
   chassisSize?: number;
+  /** Enemy positions for homing weapons (exclude the shooter). */
+  seekTargets?: { x: number; y: number }[];
 }
 
 export interface WeaponFireResult {
@@ -60,6 +63,34 @@ export function simulateWeaponFire(
     size,
   );
   const weapon = input.weapon;
+
+  // Homing rocket — steers toward nearest seek target after launch
+  if (weapon.trajectory === "homing") {
+    const impact = simulateHoming(
+      world,
+      {
+        origin,
+        angleDeg: input.angleDeg,
+        power: input.power,
+        facing: input.facing,
+        wind: input.wind,
+        weapon,
+      },
+      input.seekTargets ?? [],
+    );
+    const path = impact.steps.map((s) => ({ x: s.x, y: s.y, z: s.z }));
+    const blasts: BlastPoint[] = [];
+    if (impact.reason === "terrain" || impact.reason === "bounds") {
+      blasts.push({
+        x: impact.x,
+        y: impact.y,
+        z: impact.z,
+        radius: weapon.blastRadius,
+        damageScale: 1,
+      });
+    }
+    return { path, paths: [path], impact, blasts };
+  }
 
   // Cluster: single flight, split on impact
   if (weapon.trajectory === "cluster") {

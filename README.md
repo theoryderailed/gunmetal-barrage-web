@@ -18,6 +18,7 @@ The production build serves the **client and Colyseus server on the same origin*
 - **Scattered spawns** — shuffled pads across the map (not fixed left/right lanes)
 - **Turn-based combat** — move → set power → fire; wind; turn timer; full fuel each turn
 - **Power meter fire** — Q/E (or HUD ±) sets power; **Space** / **FIRE** shoots once (no hold-to-charge)
+- **Alt weapons** — **R** fires secondary (often a **one-shot Mini Nuke**); primaries include **Heat Seeker** homing rockets
 - **Short aim guide** — only the early arc is shown (no free impact reticle)
 - **Budget loadouts** — procedural tanks/weapons under a point cap; weapon catalog testable in Sandbox
 - **Lobbies** — public rooms, private join codes, unique bot pilots, ready meter
@@ -68,10 +69,11 @@ npm start
 | A / D | Move |
 | W / S | Aim angle |
 | Q / E (or , / .) | Lower / raise power |
-| Space or FIRE | Fire at current power |
+| Space or FIRE | Fire primary at current power |
+| R or FIRE ALT | Fire secondary / special (e.g. Mini Nuke ×1) |
 | F | Flip facing |
 | P | Pass turn |
-| 1–7 | Sandbox weapon select |
+| 1–8 | Sandbox weapon select |
 | [ ] | Sandbox cycle weapons |
 | Esc | Sandbox → menu |
 

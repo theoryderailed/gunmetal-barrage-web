@@ -152,6 +152,107 @@ export function simulateBallistic(
 }
 
 /**
+ * Homing rocket: ballistic launch, then steers toward the nearest target.
+ * Not perfect lock-on — limited turn rate so aim + power still matter.
+ */
+export function simulateHoming(
+  world: VoxelWorld,
+  input: BallisticInput,
+  targets: { x: number; y: number }[],
+  opts?: { dt?: number; maxSteps?: number; muzzleClearance?: number },
+): ImpactResult {
+  const dt = opts?.dt ?? DEFAULT_DT;
+  const maxSteps = opts?.maxSteps ?? 900;
+  const clearance = opts?.muzzleClearance ?? MUZZLE_CLEARANCE;
+
+  const vel = initialVelocity(input);
+  let x = input.origin.x;
+  let y = input.origin.y;
+  let z = input.origin.z;
+  let vx = vel.x;
+  let vy = vel.y;
+  let vz = vel.z;
+  // Slight loft so it doesn't plow into the dirt immediately
+  vy += 4;
+  let speed = Math.hypot(vx, vy) || 30;
+
+  let traveled = 0;
+  const steps: BallisticStep[] = [{ x, y, z, vx, vy, vz }];
+  const windAccel = input.wind * 2.2;
+  const skyLimit = Math.max(world.height * 4, world.height + 200);
+  /** Start guiding after leaving the muzzle safely. */
+  const guideAfter = 10;
+  /** Radians of heading change per second (soft lock). */
+  const turnRate = 2.8;
+
+  for (let i = 0; i < maxSteps; i++) {
+    // Light gravity — still an artillery rocket, not a free-flying drone
+    vx += windAccel * dt;
+    vy += GRAVITY * 0.42 * dt;
+
+    if (traveled >= guideAfter && targets.length > 0) {
+      let best: { x: number; y: number } | null = null;
+      let bestD = Infinity;
+      for (const t of targets) {
+        const d = Math.hypot(t.x - x, t.y - y);
+        if (d < bestD) {
+          bestD = d;
+          best = t;
+        }
+      }
+      if (best && bestD > 0.5) {
+        const wantX = best.x - x;
+        const wantY = best.y - y;
+        const wantLen = Math.hypot(wantX, wantY) || 1;
+        const tx = (wantX / wantLen) * speed;
+        const ty = (wantY / wantLen) * speed;
+        const curAng = Math.atan2(vy, vx);
+        const wantAng = Math.atan2(ty, tx);
+        let dAng = wantAng - curAng;
+        while (dAng > Math.PI) dAng -= Math.PI * 2;
+        while (dAng < -Math.PI) dAng += Math.PI * 2;
+        const maxTurn = turnRate * dt;
+        const turn = Math.max(-maxTurn, Math.min(maxTurn, dAng));
+        const newAng = curAng + turn;
+        // Bleed a little speed when turning hard
+        speed = Math.max(18, speed * (1 - Math.abs(turn) * 0.08));
+        vx = Math.cos(newAng) * speed;
+        vy = Math.sin(newAng) * speed;
+      }
+    } else {
+      speed = Math.hypot(vx, vy) || speed;
+    }
+
+    const px = x;
+    const py = y;
+    const pz = z;
+    x += vx * dt;
+    y += vy * dt;
+    z += vz * dt;
+    traveled += Math.hypot(x - px, y - py, z - pz);
+    steps.push({ x, y, z, vx, vy, vz });
+
+    if (x < -4 || x > world.width + 4 || y < -8) {
+      return { hit: true, x, y, z, steps, reason: "bounds" };
+    }
+    if (y > skyLimit) {
+      return { hit: false, x, y, z, steps, reason: "timeout" };
+    }
+    if (traveled < clearance) continue;
+    if (y >= world.height) continue;
+
+    const ix = Math.floor(x);
+    const iy = Math.floor(y);
+    const iz = Math.floor(z);
+    if (world.inBounds(ix, iy, iz) && isSolid(world.get(ix, iy, iz))) {
+      return { hit: true, x, y, z, steps, reason: "terrain" };
+    }
+  }
+
+  return { hit: false, x, y, z, steps, reason: "timeout" };
+}
+
+/**
  * Lightweight preview polyline for aim UI.
  * Respects bounce / lob / drill via the weapon trajectory type.
  */

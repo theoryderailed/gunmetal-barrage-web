@@ -70,6 +70,7 @@ export interface GameNetHandlers {
     ownerId: string;
     path: { x: number; y: number; z: number }[];
     paths?: { x: number; y: number; z: number }[][];
+    weaponId?: string;
   }) => void;
   onTerrain?: (data: { ops: TerrainOp[] }) => void;
   onDamage?: (data: {

@@ -602,12 +602,23 @@ export class GameRenderer {
    * Aim guide: only the first portion of the arc (muzzle intent).
    * No impact rings / full path — that made wind + power trivial.
    */
-  showTrajectory(player: PlayerState, wind: number): void {
+  showTrajectory(
+    player: PlayerState,
+    wind: number,
+    opts?: {
+      weaponSlot?: "primary" | "secondary";
+      seekTargets?: { x: number; y: number }[];
+    },
+  ): void {
     if (!this.world || !player.loadout) {
       this.hideTrajectory();
       return;
     }
-    const weapon = player.loadout.primary;
+    const slot = opts?.weaponSlot ?? "primary";
+    const weapon =
+      slot === "secondary" && player.loadout.secondary
+        ? player.loadout.secondary
+        : player.loadout.primary;
     const fired = simulateWeaponFire(this.world, {
       weapon,
       tankX: player.x,
@@ -618,6 +629,7 @@ export class GameRenderer {
       power: player.power,
       wind,
       chassisSize: player.loadout.chassis.size,
+      seekTargets: opts?.seekTargets,
     });
     const pts = clipAimPreview(fired.path);
     if (pts.length < 2) {

@@ -412,6 +412,7 @@ export class MatchRoom extends Room {
       ownerId: playerId,
       path: result.projectilePath,
       paths: result.projectilePaths,
+      weaponId: result.weaponId,
     });
 
     if (result.terrainOps.length) {

@@ -8,7 +8,8 @@ export type ShellStyle =
   | "drill"
   | "bounce"
   | "nuke"
-  | "triple";
+  | "triple"
+  | "homing";
 
 export function shellStyleFor(weapon?: WeaponDef | null): ShellStyle {
   if (!weapon) return "pea";
@@ -25,8 +26,10 @@ export function shellStyleFor(weapon?: WeaponDef | null): ShellStyle {
       return "nuke";
     case "triple":
       return "triple";
+    case "heat_seeker":
+      return "homing";
     default:
-      return "pea";
+      return weapon.trajectory === "homing" ? "homing" : "pea";
   }
 }
 
@@ -141,6 +144,24 @@ export function createShellMesh(style: ShellStyle, color: number): THREE.Group {
       group.add(glow, body, ring);
       break;
     }
+    case "homing": {
+      // Slim missile with exhaust glow
+      const body = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.18, 0.28, 1.2, 8),
+        bodyMat,
+      );
+      body.rotation.z = Math.PI / 2;
+      const nose = new THREE.Mesh(new THREE.ConeGeometry(0.28, 0.45, 8), rimMat);
+      nose.rotation.z = -Math.PI / 2;
+      nose.position.x = 0.7;
+      const exhaust = new THREE.Mesh(
+        new THREE.SphereGeometry(0.35, 8, 8),
+        glowMat,
+      );
+      exhaust.position.x = -0.55;
+      group.add(exhaust, body, nose);
+      break;
+    }
   }
 
   return group;
@@ -171,6 +192,8 @@ export function trailProfileFor(style: ShellStyle): TrailProfile {
       return { size: 0.7, opacity: 0.8, count: 56, every: 1, sparkle: true };
     case "triple":
       return { size: 0.5, opacity: 1, count: 54, every: 1, sparkle: true };
+    case "homing":
+      return { size: 0.38, opacity: 0.95, count: 52, every: 1, sparkle: true };
   }
 }
 
@@ -261,6 +284,17 @@ export function explosionProfileFor(style: ShellStyle, color: number): Explosion
         flashColor: color,
         spread: 14,
         flashScale: 2.1,
+        ring: true,
+        sparks: true,
+      };
+    case "homing":
+      return {
+        count: 32,
+        size: 0.85,
+        life: 0.8,
+        flashColor: 0xff6688,
+        spread: 13,
+        flashScale: 2.0,
         ring: true,
         sparks: true,
       };

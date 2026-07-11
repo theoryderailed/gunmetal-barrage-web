@@ -31,6 +31,7 @@ export interface FireResult {
   projectilePath: { x: number; y: number; z: number }[];
   /** All shell paths (Triple Threat sends 3). */
   projectilePaths: { x: number; y: number; z: number }[][];
+  weaponId: string;
   eliminated: string[];
   winnerId: string | null;
   rankings: MatchResultEntry[] | null;
@@ -342,6 +343,10 @@ export class MatchSimulation {
     p.facing = facing;
     this.phase = "resolving";
 
+    const seekTargets = this.getPlayerList()
+      .filter((t) => t.alive && t.id !== p.id)
+      .map((t) => ({ x: t.x, y: t.y }));
+
     const fired = simulateWeaponFire(this.world, {
       weapon,
       tankX: p.x,
@@ -352,6 +357,7 @@ export class MatchSimulation {
       power: p.power,
       wind: this.wind,
       chassisSize: p.loadout.chassis.size,
+      seekTargets,
     });
 
     const allOps: TerrainOp[] = blastsToTerrainOps(fired.blasts, weapon);
@@ -463,6 +469,7 @@ export class MatchSimulation {
       damages: allDamage,
       projectilePath: mainPath,
       projectilePaths: allPaths,
+      weaponId: weapon.id,
       eliminated: [...new Set(eliminated)],
       winnerId,
       rankings,

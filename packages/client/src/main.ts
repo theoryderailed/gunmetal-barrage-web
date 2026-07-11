@@ -1,6 +1,6 @@
 import {
   DEFAULT_MATCH_CONFIG,
-  WEAPON_POOL,
+  allWeapons,
   clampAngle,
   clampPower,
   formatWeaponBehavior,
@@ -285,7 +285,16 @@ const net = new GameClient({
     renderer.hideTrajectory();
     pendingImpact = createPendingImpact();
     const shooter = players.find((p) => p.id === data.ownerId);
-    const weapon = shooter?.loadout?.primary ?? null;
+    const weapon =
+      (data.weaponId
+        ? shooter?.loadout?.primary?.id === data.weaponId
+          ? shooter.loadout.primary
+          : shooter?.loadout?.secondary?.id === data.weaponId
+            ? shooter.loadout.secondary
+            : null
+        : null) ??
+      shooter?.loadout?.primary ??
+      null;
     pendingWeapon = weapon;
     phase = "resolving";
     if (data.ownerId === myId) postShotLock = true;
@@ -635,6 +644,9 @@ function updateAmbient(dt: number, now: number): void {
     power: shooter.power,
     wind,
     chassisSize: shooter.loadout.chassis.size,
+    seekTargets: alive
+      .filter((t) => t.id !== shooter.id)
+      .map((t) => ({ x: t.x, y: t.y })),
   });
 
   ambientShotCount++;
@@ -732,8 +744,9 @@ function startSandbox(): void {
 
 function equipSandboxWeapon(index: number): void {
   if (mode !== "sandbox") return;
+  const catalog = allWeapons();
   sandboxWeaponIndex =
-    ((index % WEAPON_POOL.length) + WEAPON_POOL.length) % WEAPON_POOL.length;
+    ((index % catalog.length) + catalog.length) % catalog.length;
   const me = players.find((p) => p.id === myId);
   if (!me) return;
   const weapon = getWeaponByIndex(sandboxWeaponIndex);
@@ -750,7 +763,10 @@ function equipSandboxWeapon(index: number): void {
     dummy.alive = true;
   }
   renderer.syncPlayers(players);
-  showToast(`${sandboxWeaponIndex + 1}. ${weapon.name} — ${formatWeaponBehavior(weapon)}`);
+  const note = weapon.secondaryOnly ? " (special · 1 shot)" : "";
+  showToast(
+    `${sandboxWeaponIndex + 1}. ${weapon.name}${note} — ${formatWeaponBehavior(weapon)}`,
+  );
 }
 
 function makePlayer(
@@ -846,15 +862,29 @@ function adjustPower(delta: number): void {
   renderer.syncPlayers(players);
 }
 
-/** Single-press fire at current power (no hold-to-charge). */
-function fireShot(): void {
+/** Single-press fire at current power. slot: primary (Space) or secondary/alt (R). */
+function fireShot(slot: "primary" | "secondary" = "primary"): void {
   if (!canFire()) {
     if (shotInProgress() || postShotLock) showToast("Wait for shell to land");
     return;
   }
 
   const me = players.find((p) => p.id === myId);
-  if (!me || !me.alive) return;
+  if (!me || !me.alive || !me.loadout) return;
+
+  if (slot === "secondary") {
+    if (!me.loadout.secondary) {
+      showToast("No alt weapon");
+      return;
+    }
+    if (me.secondaryAmmo <= 0) {
+      showToast(`${me.loadout.secondary.name} spent`);
+      return;
+    }
+  } else if (me.primaryAmmo <= 0) {
+    showToast("Out of ammo");
+    return;
+  }
 
   const power = clampPower(me.power);
   me.power = power;
@@ -864,9 +894,12 @@ function fireShot(): void {
     net.fire({
       angle: me.angle,
       power,
-      weaponSlot: "primary",
+      weaponSlot: slot,
       facing: me.facing,
     });
+    // Optimistic ammo so HUD updates immediately
+    if (slot === "secondary") me.secondaryAmmo = Math.max(0, me.secondaryAmmo - 1);
+    else me.primaryAmmo = Math.max(0, me.primaryAmmo - 1);
     phase = "resolving";
     window.setTimeout(() => {
       if (
@@ -879,28 +912,35 @@ function fireShot(): void {
       }
     }, 900);
   } else {
-    fireSandbox(me);
+    fireSandbox(me, slot);
   }
 }
 
 window.addEventListener("keydown", (e) => {
-  // Space: single fire on press (ignore key-repeat)
+  // Space: primary fire (ignore key-repeat)
   if (e.code === "Space") {
     e.preventDefault();
     if (e.repeat) return;
     keys.add(e.code);
-    fireShot();
+    fireShot("primary");
+    return;
+  }
+  // R: secondary / special (Mini Nuke, etc.)
+  if (e.code === "KeyR") {
+    e.preventDefault();
+    if (e.repeat) return;
+    fireShot("secondary");
     return;
   }
   keys.add(e.code);
   if (e.code === "Escape") {
     if (mode === "sandbox") void showMenu();
   }
-  // Sandbox weapon select: 1–7, [ ] cycle
+  // Sandbox weapon select: 1–8, [ ] cycle (includes Mini Nuke special)
   if (mode === "sandbox") {
     if (e.code.startsWith("Digit")) {
       const n = Number(e.code.replace("Digit", ""));
-      if (n >= 1 && n <= WEAPON_POOL.length) {
+      if (n >= 1 && n <= allWeapons().length) {
         equipSandboxWeapon(n - 1);
         e.preventDefault();
       }
@@ -1050,14 +1090,20 @@ function updateInput(dt: number): void {
 
   // Don't re-center on the tank while the shell is mid-flight
   if (!renderer.isCameraLockedOnShot() && (isMyTurn || mode === "sandbox")) {
-    renderer.showTrajectory(me, wind);
+    const seekTargets = players
+      .filter((t) => t.alive && t.id !== me.id)
+      .map((t) => ({ x: t.x, y: t.y }));
+    renderer.showTrajectory(me, wind, { seekTargets });
     renderer.focusPlayer(me);
   } else if (shotInProgress()) {
     renderer.hideTrajectory();
   }
 }
 
-function fireSandbox(me: PlayerState): void {
+function fireSandbox(
+  me: PlayerState,
+  slot: "primary" | "secondary" = "primary",
+): void {
   const world = renderer.getWorld();
   if (!world || !me.loadout) {
     showToast("Can't fire right now");
@@ -1071,7 +1117,27 @@ function fireSandbox(me: PlayerState): void {
   phase = "move"; // reset any sticky state before arming
 
   const midZ = renderer.getMidZ();
-  const weapon = me.loadout.primary;
+  const weapon =
+    slot === "secondary" && me.loadout.secondary
+      ? me.loadout.secondary
+      : me.loadout.primary;
+  if (slot === "secondary" && !me.loadout.secondary) {
+    showToast("No alt weapon");
+    return;
+  }
+  if (slot === "secondary" && me.secondaryAmmo <= 0) {
+    showToast(`${weapon.name} spent`);
+    return;
+  }
+  if (slot === "primary" && me.primaryAmmo <= 0) {
+    showToast("Out of ammo");
+    return;
+  }
+
+  const seekTargets = players
+    .filter((t) => t.alive && t.id !== me.id)
+    .map((t) => ({ x: t.x, y: t.y }));
+
   const fired = simulateWeaponFire(world, {
     weapon,
     tankX: me.x,
@@ -1082,10 +1148,12 @@ function fireSandbox(me: PlayerState): void {
     power: me.power,
     wind,
     chassisSize: me.loadout.chassis.size,
+    seekTargets,
   });
 
   renderer.hideTrajectory();
-  me.primaryAmmo = Math.max(0, me.primaryAmmo - 1);
+  if (slot === "secondary") me.secondaryAmmo = Math.max(0, me.secondaryAmmo - 1);
+  else me.primaryAmmo = Math.max(0, me.primaryAmmo - 1);
   phase = "resolving";
   showToast(`▶ ${weapon.name} · ${formatWeaponBehavior(weapon)}`);
 
@@ -1201,7 +1269,7 @@ function loop(): void {
         phase,
         sandbox: mode === "sandbox",
         weaponIndex: sandboxWeaponIndex,
-        weaponCount: WEAPON_POOL.length,
+        weaponCount: allWeapons().length,
         mapName: renderer.getMapName(),
       });
     }
@@ -1220,9 +1288,12 @@ uiRoot.addEventListener("pointerdown", (e) => {
   if (t.closest("#btn-pass")) {
     e.preventDefault();
     passTurn();
+  } else if (t.closest("#btn-fire-alt")) {
+    e.preventDefault();
+    fireShot("secondary");
   } else if (t.closest("#btn-fire")) {
     e.preventDefault();
-    fireShot();
+    fireShot("primary");
   } else if (t.closest("#btn-power-up")) {
     e.preventDefault();
     adjustPower(5);

@@ -50,8 +50,7 @@ export const CHASSIS_POOL: ChassisDef[] = [
 ];
 
 /**
- * Canonical weapon catalog. Each entry should be testable in isolation in sandbox
- * (keys 1–7 cycle these in order).
+ * Primary weapon catalog (sandbox keys 1–7). Mini Nuke is a secondary special.
  */
 export const WEAPON_POOL: WeaponDef[] = [
   {
@@ -114,7 +113,6 @@ export const WEAPON_POOL: WeaponDef[] = [
     trajectory: "drill",
     behavior: "drill",
     maxAmmo: 5,
-    // Mild speed boost only — range mainly from 0.82× gravity, not 1.15× + half G
     powerMultiplier: 1.05,
     weight: 2,
     color: 0xbb44ff,
@@ -136,20 +134,20 @@ export const WEAPON_POOL: WeaponDef[] = [
     color: 0x22ffcc,
   },
   {
-    id: "nuke_lite",
-    name: "Mini Nuke",
-    summary: "Heavy lob with large blast. Limited ammo.",
-    howToTest: "Huge crater + screen shake. Self-splash if you land too close.",
-    cost: 450,
-    damage: 95,
-    blastRadius: 8.5,
+    id: "heat_seeker",
+    name: "Heat Seeker",
+    summary: "Homing rocket that steers toward the nearest enemy after launch.",
+    howToTest: "Aim roughly at a target — missile should curve toward them mid-flight.",
+    cost: 240,
+    damage: 48,
+    blastRadius: 4.0,
     projectileCount: 1,
-    trajectory: "lob",
-    behavior: "lob",
-    maxAmmo: 2,
-    powerMultiplier: 0.85,
-    weight: 1,
-    color: 0xff1100,
+    trajectory: "homing",
+    behavior: "homing",
+    maxAmmo: 6,
+    powerMultiplier: 1.0,
+    weight: 3,
+    color: 0xff3366,
   },
   {
     id: "triple",
@@ -165,10 +163,37 @@ export const WEAPON_POOL: WeaponDef[] = [
     maxAmmo: 6,
     powerMultiplier: 1.0,
     weight: 3,
-    // Neon yellow — high contrast vs sky/hills
     color: 0xffff00,
   },
 ];
+
+/**
+ * One-shot (or very limited) alternate weapons — only roll as secondary.
+ */
+export const SECONDARY_SPECIALS: WeaponDef[] = [
+  {
+    id: "nuke_lite",
+    name: "Mini Nuke",
+    summary: "Once-per-match panic button. Huge lob blast — use carefully.",
+    howToTest: "Equip as alt (R). One shot only. Massive crater + self-splash risk.",
+    cost: 160,
+    damage: 70,
+    blastRadius: 6.8,
+    projectileCount: 1,
+    trajectory: "lob",
+    behavior: "special",
+    maxAmmo: 1,
+    powerMultiplier: 0.88,
+    weight: 4,
+    color: 0xff1100,
+    secondaryOnly: true,
+  },
+];
+
+/** Primaries + specials (sandbox catalog). */
+export function allWeapons(): WeaponDef[] {
+  return [...WEAPON_POOL, ...SECONDARY_SPECIALS];
+}
 
 const NAME_PREFIX = [
   "Rusty",
@@ -196,17 +221,21 @@ const NAME_SUFFIX = [
 ];
 
 export function getWeaponById(id: string): WeaponDef | undefined {
-  return WEAPON_POOL.find((w) => w.id === id);
+  return allWeapons().find((w) => w.id === id);
 }
 
+/** Sandbox catalog index into primaries + specials. */
 export function getWeaponByIndex(index: number): WeaponDef {
-  const i = ((index % WEAPON_POOL.length) + WEAPON_POOL.length) % WEAPON_POOL.length;
-  return WEAPON_POOL[i]!;
+  const pool = allWeapons();
+  const i = ((index % pool.length) + pool.length) % pool.length;
+  return pool[i]!;
 }
 
 /** Compact stats line for HUD. */
 export function formatWeaponStats(w: WeaponDef): string {
-  return `DMG ${w.damage} · BLAST ${w.blastRadius} · ×${w.projectileCount} · ${w.trajectory.toUpperCase()}`;
+  const ammo =
+    w.maxAmmo <= 1 ? "×1" : `×${w.projectileCount}`;
+  return `DMG ${w.damage} · BLAST ${w.blastRadius} · ${ammo} · ${w.trajectory.toUpperCase()}`;
 }
 
 export function formatWeaponBehavior(w: WeaponDef): string {
@@ -223,6 +252,10 @@ export function formatWeaponBehavior(w: WeaponDef): string {
       return "1 shell → submunitions at impact";
     case "triple":
       return "3 tight shells → 3 nearby blasts";
+    case "homing":
+      return "1 rocket → steers toward nearest enemy";
+    case "special":
+      return "ALT only · 1 shot per match · huge blast";
     default:
       return w.summary;
   }
@@ -231,6 +264,7 @@ export function formatWeaponBehavior(w: WeaponDef): string {
 /** Fixed test loadout: standard hull + chosen weapon (sandbox). */
 export function makeTestLoadout(weapon: WeaponDef, budget = 1000): Loadout {
   const chassis = CHASSIS_POOL.find((c) => c.id === "standard") ?? CHASSIS_POOL[0]!;
+  // Specials test as primary in sandbox so you can fire them with Space
   return {
     seed: 0,
     budget,
@@ -245,6 +279,7 @@ export function makeTestLoadout(weapon: WeaponDef, budget = 1000): Loadout {
 
 /**
  * Generate a tank + weapons loadout within budget. Deterministic for seed.
+ * Primary = regular pool. Secondary = often a one-shot special (Mini Nuke) or alt gun.
  */
 export function generateLoadout(seed: number, budget: number): Loadout {
   const rng = createRng(seed);
@@ -259,9 +294,9 @@ export function generateLoadout(seed: number, budget: number): Loadout {
 
   let remaining = budget - chassis.cost;
 
-  const primaryCandidates = WEAPON_POOL.filter((w) => w.cost <= remaining).map(
-    (w) => ({ ...w, weight: w.weight }),
-  );
+  const primaryCandidates = WEAPON_POOL.filter(
+    (w) => !w.secondaryOnly && w.cost <= remaining,
+  ).map((w) => ({ ...w, weight: w.weight }));
   const primary =
     primaryCandidates.length > 0
       ? pickWeighted(rng, primaryCandidates)
@@ -269,13 +304,25 @@ export function generateLoadout(seed: number, budget: number): Loadout {
   remaining -= primary.cost;
 
   let secondary: WeaponDef | null = null;
-  if (remaining >= 80 && rng() > 0.35) {
-    const secCandidates = WEAPON_POOL.filter(
-      (w) => w.cost <= remaining && w.id !== primary.id,
-    ).map((w) => ({ ...w, weight: w.weight }));
-    if (secCandidates.length > 0) {
-      secondary = pickWeighted(rng, secCandidates);
+  if (remaining >= 80 && rng() > 0.22) {
+    const specials = SECONDARY_SPECIALS.filter((w) => w.cost <= remaining).map(
+      (w) => ({ ...w, weight: w.weight }),
+    );
+    // Bias toward one-shot specials when they fit (~60% of secondary rolls)
+    if (specials.length > 0 && rng() < 0.6) {
+      secondary = pickWeighted(rng, specials);
       remaining -= secondary.cost;
+    } else {
+      const secCandidates = WEAPON_POOL.filter(
+        (w) => !w.secondaryOnly && w.cost <= remaining && w.id !== primary.id,
+      ).map((w) => ({ ...w, weight: w.weight }));
+      if (secCandidates.length > 0) {
+        secondary = pickWeighted(rng, secCandidates);
+        remaining -= secondary.cost;
+      } else if (specials.length > 0) {
+        secondary = pickWeighted(rng, specials);
+        remaining -= secondary.cost;
+      }
     }
   }
 

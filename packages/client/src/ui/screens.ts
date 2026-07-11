@@ -339,6 +339,8 @@ export function renderHud(
           : opts.phase.toUpperCase();
 
   const w = me?.loadout?.primary;
+  const alt = me?.loadout?.secondary;
+  const altAmmo = me?.secondaryAmmo ?? 0;
   const weaponCard = w
     ? `
       <div class="hud-box weapon-card">
@@ -350,9 +352,14 @@ export function renderHud(
         ${
           opts.sandbox
             ? `<div class="weapon-test">${escapeHtml(w.howToTest ?? "")}</div>
-               <div class="weapon-keys">1–7 select · [ ] cycle · SPACE fire</div>`
-            : me?.loadout?.secondary
-              ? `<div class="weapon-secondary">Alt: ${escapeHtml(me.loadout.secondary.name)}</div>`
+               <div class="weapon-keys">1–8 select · [ ] cycle · SPACE fire · R alt</div>`
+            : alt
+              ? `<div class="weapon-secondary ${altAmmo <= 0 ? "spent" : ""}">
+                   <span class="weapon-secondary-label">ALT · R</span>
+                   <span class="weapon-secondary-name">${escapeHtml(alt.name)}</span>
+                   <span class="weapon-secondary-ammo">${altAmmo}/${alt.maxAmmo}</span>
+                   ${altAmmo > 0 ? `<button type="button" class="btn-alt-fire" id="btn-fire-alt">FIRE ALT</button>` : `<span class="weapon-secondary-gone">SPENT</span>`}
+                 </div>`
               : ""
         }
       </div>`
@@ -459,6 +466,10 @@ function formatBehavior(w: {
       return "BEHAVIOR: high lob → 1 blast";
     case "drill":
       return "BEHAVIOR: low-G drill → deep shaft + undercut";
+    case "homing":
+      return "BEHAVIOR: rocket steers toward nearest enemy";
+    case "special":
+      return "BEHAVIOR: ALT special · usually 1 shot";
     case "bounce":
       return "BEHAVIOR: bounce ×2 → blast";
     case "cluster":
