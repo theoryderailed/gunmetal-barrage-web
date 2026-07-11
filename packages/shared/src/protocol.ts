@@ -2,6 +2,7 @@
 export const ClientMsg = {
   SetName: "set_name",
   SetReady: "set_ready",
+  SelectLoadout: "select_loadout",
   AddBot: "add_bot",
   StartMatch: "start_match",
   Move: "move",

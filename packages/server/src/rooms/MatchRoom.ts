@@ -5,7 +5,10 @@ import {
   ServerMsg,
   buildRankings,
   generateBotIdentity,
+  generateLoadoutChoices,
   hashSeed,
+  loadoutPreview,
+  type Loadout,
   type MatchConfig,
   type AimPayload,
   type FirePayload,
@@ -30,6 +33,14 @@ interface CreateOptions {
 interface ClientData {
   name: string;
   ready: boolean;
+  loadoutChoices: Loadout[];
+  selectedLoadoutIndex: number;
+}
+
+interface PendingBot {
+  identity: PilotIdentity;
+  loadoutChoices: Loadout[];
+  selectedLoadoutIndex: number;
 }
 
 export class MatchRoom extends Room {
@@ -45,7 +56,7 @@ export class MatchRoom extends Room {
   private roomTitle = "Gun Metal Barrage";
   private botCount = 0;
   /** Unique pilots rolled when bots are added (before match). */
-  private pendingBots: PilotIdentity[] = [];
+  private pendingBots: PendingBot[] = [];
   /** Monotonic token so stale bot/turn callbacks never act after the turn advanced. */
   private turnEpoch = 0;
 
@@ -90,6 +101,26 @@ export class MatchRoom extends Room {
       getClientData(client).ready = !!message.ready;
       this.broadcastLobby();
     });
+
+    this.onMessage(
+      ClientMsg.SelectLoadout,
+      (client, message: { index?: number }) => {
+        if (this.sim?.status === "playing") return;
+        const data = getClientData(client);
+        const idx = Math.floor(Number(message.index ?? 0));
+        if (
+          !Number.isFinite(idx) ||
+          idx < 0 ||
+          idx >= data.loadoutChoices.length
+        ) {
+          return;
+        }
+        data.selectedLoadoutIndex = idx;
+        // Changing kit un-readies so host doesn't start mid-swap
+        data.ready = false;
+        this.broadcastLobby();
+      },
+    );
 
     this.onMessage(ClientMsg.AddBot, (client) => {
       if (this.sim?.status === "playing") return;
@@ -157,9 +188,16 @@ export class MatchRoom extends Room {
     const name =
       options.displayName?.slice(0, 20) ||
       `Tank-${client.sessionId.slice(0, 4)}`;
+    const choiceSeed = hashSeed(
+      this.joinCode,
+      client.sessionId,
+      "lobby-loadouts",
+    );
     (client as Client & { userData: ClientData }).userData = {
       name,
       ready: false,
+      loadoutChoices: generateLoadoutChoices(choiceSeed, this.config.budget, 3),
+      selectedLoadoutIndex: 0,
     };
 
     if (this.sim && this.sim.status === "playing") {
@@ -215,6 +253,8 @@ export class MatchRoom extends Room {
   private broadcastLobby(): void {
     const humans = this.clients.map((c) => {
       const data = getClientData(c);
+      const lo =
+        data.loadoutChoices[data.selectedLoadoutIndex] ?? data.loadoutChoices[0];
       return {
         id: c.sessionId,
         name: data.name,
@@ -224,25 +264,40 @@ export class MatchRoom extends Room {
         title: null as string | null,
         persona: null as string | null,
         motto: null as string | null,
+        loadoutPreview: lo ? loadoutPreview(lo) : null,
+        selectedLoadoutIndex: data.selectedLoadoutIndex,
       };
     });
-    const bots = this.pendingBots.map((id, i) => ({
-      id: `bot-${i}`,
-      name: id.displayName,
-      ready: true,
-      isBot: true,
-      isHost: false,
-      title: id.title,
-      persona: id.persona,
-      motto: id.motto,
-    }));
-    this.broadcast("lobby_state", {
-      players: [...humans, ...bots],
-      config: this.config,
-      joinCode: this.joinCode,
-      hostId: this.hostId,
-      title: this.roomTitle,
+    const bots = this.pendingBots.map((bot, i) => {
+      const lo =
+        bot.loadoutChoices[bot.selectedLoadoutIndex] ?? bot.loadoutChoices[0];
+      return {
+        id: `bot-${i}`,
+        name: bot.identity.displayName,
+        ready: true,
+        isBot: true,
+        isHost: false,
+        title: bot.identity.title,
+        persona: bot.identity.persona,
+        motto: bot.identity.motto,
+        loadoutPreview: lo ? loadoutPreview(lo) : null,
+        selectedLoadoutIndex: bot.selectedLoadoutIndex,
+      };
     });
+    const players = [...humans, ...bots];
+    // Personalized: each human gets their own 3 loadout choices for character select
+    for (const c of this.clients) {
+      const data = getClientData(c);
+      c.send("lobby_state", {
+        players,
+        config: this.config,
+        joinCode: this.joinCode,
+        hostId: this.hostId,
+        title: this.roomTitle,
+        myLoadoutChoices: data.loadoutChoices,
+        mySelectedLoadoutIndex: data.selectedLoadoutIndex,
+      });
+    }
   }
 
   private broadcastState(): void {
@@ -272,12 +327,20 @@ export class MatchRoom extends Room {
     let identity = generateBotIdentity(seed);
     let guard = 0;
     while (
-      this.pendingBots.some((b) => b.displayName === identity.displayName) &&
+      this.pendingBots.some(
+        (b) => b.identity.displayName === identity.displayName,
+      ) &&
       guard++ < 12
     ) {
       identity = generateBotIdentity(seed + guard * 9973);
     }
-    this.pendingBots.push(identity);
+    const loadoutChoices = generateLoadoutChoices(
+      hashSeed(seed, "bot-kits"),
+      this.config.budget,
+      3,
+    );
+    const selectedLoadoutIndex = Math.floor(Math.random() * loadoutChoices.length);
+    this.pendingBots.push({ identity, loadoutChoices, selectedLoadoutIndex });
     this.botCount = this.pendingBots.length;
     this.updateMetaPlayers();
   }
@@ -297,24 +360,32 @@ export class MatchRoom extends Room {
     this.sim = new MatchSimulation(seed, this.config);
 
     for (const c of this.clients) {
-      const name = getClientData(c).name;
+      const data = getClientData(c);
+      const name = data.name;
+      const loadout =
+        data.loadoutChoices[data.selectedLoadoutIndex] ??
+        data.loadoutChoices[0];
       this.sim.addPlayer({
         id: c.sessionId,
         sessionId: c.sessionId,
         name,
         isBot: false,
         identity: null,
+        loadout: loadout ? structuredClone(loadout) : undefined,
       });
     }
     for (let i = 0; i < this.pendingBots.length; i++) {
-      const identity = this.pendingBots[i]!;
+      const bot = this.pendingBots[i]!;
       const id = `bot-${i}`;
+      const loadout =
+        bot.loadoutChoices[bot.selectedLoadoutIndex] ?? bot.loadoutChoices[0];
       this.sim.addPlayer({
         id,
         sessionId: id,
-        name: identity.displayName,
+        name: bot.identity.displayName,
         isBot: true,
-        identity,
+        identity: bot.identity,
+        loadout: loadout ? structuredClone(loadout) : undefined,
       });
     }
 
@@ -599,7 +670,16 @@ export class MatchRoom extends Room {
 function getClientData(client: Client): ClientData {
   const c = client as Client & { userData?: ClientData };
   if (!c.userData) {
-    c.userData = { name: "Tank", ready: false };
+    c.userData = {
+      name: "Tank",
+      ready: false,
+      loadoutChoices: generateLoadoutChoices(
+        hashSeed(client.sessionId, "fallback-kits"),
+        DEFAULT_MATCH_CONFIG.budget,
+        3,
+      ),
+      selectedLoadoutIndex: 0,
+    };
   }
   return c.userData;
 }

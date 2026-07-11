@@ -4,6 +4,7 @@ import {
   ServerMsg,
   type AimPayload,
   type FirePayload,
+  type Loadout,
   type MatchConfig,
   type MatchEndPayload,
   type MatchStartedPayload,
@@ -32,6 +33,16 @@ function resolveDefaultWs(): string {
 
 const DEFAULT_WS = resolveDefaultWs();
 
+export interface LoadoutPreview {
+  tankName: string;
+  chassisName: string;
+  primaryName: string;
+  secondaryName: string | null;
+  hp: number;
+  armor: number;
+  fuel: number;
+}
+
 export interface LobbyPlayer {
   id: string;
   name: string;
@@ -41,6 +52,8 @@ export interface LobbyPlayer {
   title?: string | null;
   persona?: string | null;
   motto?: string | null;
+  loadoutPreview?: LoadoutPreview | null;
+  selectedLoadoutIndex?: number;
 }
 
 export interface GameNetHandlers {
@@ -50,6 +63,8 @@ export interface GameNetHandlers {
     joinCode: string;
     hostId: string | null;
     title: string;
+    myLoadoutChoices?: Loadout[];
+    mySelectedLoadoutIndex?: number;
   }) => void;
   onMatchStarted?: (data: MatchStartedPayload) => void;
   onTurnStart?: (data: TurnStartPayload) => void;
@@ -170,6 +185,10 @@ export class GameClient {
 
   sendReady(ready: boolean): void {
     this.room?.send(ClientMsg.SetReady, { ready });
+  }
+
+  sendSelectLoadout(index: number): void {
+    this.room?.send(ClientMsg.SelectLoadout, { index });
   }
 
   sendName(name: string): void {

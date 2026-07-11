@@ -95,9 +95,12 @@ export class MatchSimulation {
     name: string;
     isBot: boolean;
     identity?: PilotIdentity | null;
+    /** Pre-selected lobby loadout (character select). */
+    loadout?: import("@gunmetal-barrage/shared").Loadout;
   }): PlayerState {
     const loadoutSeed = hashSeed(this.matchSeed, opts.id, "loadout");
-    const loadout = generateLoadout(loadoutSeed, this.config.budget);
+    const loadout =
+      opts.loadout ?? generateLoadout(loadoutSeed, this.config.budget);
     const identity = opts.identity ?? null;
 
     // Bots: unique palette + display name from identity

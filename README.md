@@ -22,6 +22,7 @@ The production build serves the **client and Colyseus server on the same origin*
 - **Short aim guide** — only the early arc is shown (no free impact reticle)
 - **Budget loadouts** — procedural tanks/weapons under a point cap; weapon catalog testable in Sandbox
 - **Lobbies** — public rooms, private join codes, unique bot pilots, ready meter
+- **Character select** — each pilot picks from **3 tank kits** (chassis + primary + alt) before ready
 - **Leaderboard** — post-match rankings in SQLite
 - **Sandbox** — keys 1–7 to try every weapon behavior (single, lob, cluster, drill, bounce, triple, nuke)
 

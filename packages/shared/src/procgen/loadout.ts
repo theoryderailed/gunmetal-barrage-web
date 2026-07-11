@@ -1,4 +1,4 @@
-import { createRng, pickWeighted, randInt } from "../rng.js";
+import { createRng, hashSeed, pickWeighted, randInt } from "../rng.js";
 import type { ChassisDef, Loadout, WeaponDef } from "../types.js";
 
 export const CHASSIS_POOL: ChassisDef[] = [
@@ -282,22 +282,44 @@ export function makeTestLoadout(weapon: WeaponDef, budget = 1000): Loadout {
  * Generate a tank + weapons loadout within budget. Deterministic for seed.
  * Primary = regular pool. Secondary = often a one-shot special (Mini Nuke) or alt gun.
  */
-export function generateLoadout(seed: number, budget: number): Loadout {
+export function generateLoadout(
+  seed: number,
+  budget: number,
+  opts?: {
+    /** Force a chassis id when affordable */
+    preferChassisId?: string;
+    /** Prefer these primary weapons when affordable */
+    preferPrimaryIds?: string[];
+  },
+): Loadout {
   const rng = createRng(seed);
 
   const chassisCandidates = CHASSIS_POOL.filter((c) => c.cost + 80 <= budget).map(
     (c) => ({ ...c, weight: c.weight }),
   );
-  const chassis =
+  let chassis =
     chassisCandidates.length > 0
       ? pickWeighted(rng, chassisCandidates)
       : CHASSIS_POOL[0]!;
 
+  if (opts?.preferChassisId) {
+    const forced = chassisCandidates.find((c) => c.id === opts.preferChassisId);
+    if (forced) chassis = forced;
+  }
+
   let remaining = budget - chassis.cost;
 
-  const primaryCandidates = WEAPON_POOL.filter(
+  let primaryCandidates = WEAPON_POOL.filter(
     (w) => !w.secondaryOnly && w.cost <= remaining,
   ).map((w) => ({ ...w, weight: w.weight }));
+
+  if (opts?.preferPrimaryIds?.length) {
+    const preferred = primaryCandidates.filter((w) =>
+      opts.preferPrimaryIds!.includes(w.id),
+    );
+    if (preferred.length > 0) primaryCandidates = preferred;
+  }
+
   const primary =
     primaryCandidates.length > 0
       ? pickWeighted(rng, primaryCandidates)
@@ -344,5 +366,83 @@ export function generateLoadout(seed: number, budget: number): Loadout {
     secondary: secondary ? { ...secondary } : null,
     palette,
     name,
+  };
+}
+
+/**
+ * Three distinct tanks for lobby character select (scout / standard / heavy flavors).
+ */
+export function generateLoadoutChoices(
+  seed: number,
+  budget: number,
+  count = 3,
+): Loadout[] {
+  const archetypes: {
+    preferChassisId: string;
+    preferPrimaryIds: string[];
+    label: string;
+  }[] = [
+    {
+      preferChassisId: "scout",
+      preferPrimaryIds: ["peashooter", "heat_seeker", "ricochet", "triple"],
+      label: "Scout",
+    },
+    {
+      preferChassisId: "standard",
+      preferPrimaryIds: ["howitzer", "scatter", "triple", "heat_seeker"],
+      label: "Balanced",
+    },
+    {
+      preferChassisId: "heavy",
+      preferPrimaryIds: ["bunker_buster", "howitzer", "scatter", "ricochet"],
+      label: "Heavy",
+    },
+  ];
+
+  const choices: Loadout[] = [];
+  for (let i = 0; i < count; i++) {
+    const arch = archetypes[i % archetypes.length]!;
+    // Fall back if heavy too expensive
+    let chassisId = arch.preferChassisId;
+    const chassis = CHASSIS_POOL.find((c) => c.id === chassisId);
+    if (!chassis || chassis.cost + 80 > budget) {
+      chassisId = "standard";
+    }
+    if (
+      chassisId === "standard" &&
+      (CHASSIS_POOL.find((c) => c.id === "standard")?.cost ?? 999) + 80 > budget
+    ) {
+      chassisId = "scout";
+    }
+
+    const lo = generateLoadout(hashSeed(seed, "choice", i, chassisId), budget, {
+      preferChassisId: chassisId,
+      preferPrimaryIds: arch.preferPrimaryIds,
+    });
+    // Tag callsign with archetype for UI
+    lo.name = `${arch.label} · ${lo.name}`;
+    choices.push(lo);
+  }
+  return choices;
+}
+
+/** Compact preview for lobby list (not full weapon tables). */
+export function loadoutPreview(lo: Loadout): {
+  tankName: string;
+  chassisName: string;
+  primaryName: string;
+  secondaryName: string | null;
+  hp: number;
+  armor: number;
+  fuel: number;
+} {
+  return {
+    tankName: lo.name,
+    chassisName: lo.chassis.name,
+    primaryName: lo.primary.name,
+    secondaryName: lo.secondary?.name ?? null,
+    hp: lo.chassis.maxHp,
+    armor: lo.chassis.armor,
+    fuel: lo.chassis.fuel,
   };
 }

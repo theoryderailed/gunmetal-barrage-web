@@ -18,6 +18,7 @@ import {
   blastsToTerrainOps,
   resolveBlastDamage,
   simulateWeaponFire,
+  type Loadout,
   type MatchResultEntry,
   type PilotIdentity,
   type PlayerState,
@@ -77,6 +78,9 @@ let lobbyMeta = {
   hostId: null as string | null,
 };
 let ready = false;
+/** Three tanks offered in lobby character select */
+let myLoadoutChoices: Loadout[] = [];
+let mySelectedLoadoutIndex = 0;
 let players: PlayerState[] = [];
 let wind = 0;
 let currentPlayerId: string | null = null;
@@ -193,6 +197,15 @@ const net = new GameClient({
       isPrivate: data.config.isPrivate,
       hostId: data.hostId,
     };
+    if (data.myLoadoutChoices?.length) {
+      myLoadoutChoices = data.myLoadoutChoices;
+    }
+    if (typeof data.mySelectedLoadoutIndex === "number") {
+      mySelectedLoadoutIndex = data.mySelectedLoadoutIndex;
+    }
+    // Selecting a kit un-readies on the server
+    const me = data.players.find((p) => p.id === net.sessionId);
+    if (me) ready = me.ready;
     if (mode === "lobby") showLobby();
   },
   onMatchStarted: (data) => {
@@ -494,6 +507,14 @@ function showLobby(): void {
     players: lobbyPlayers,
     isHost: lobbyMeta.hostId === net.sessionId,
     ready,
+    loadoutChoices: myLoadoutChoices,
+    selectedLoadoutIndex: mySelectedLoadoutIndex,
+    onSelectLoadout: (index) => {
+      mySelectedLoadoutIndex = index;
+      ready = false;
+      net.sendSelectLoadout(index);
+      showLobby();
+    },
     onReady: (r) => {
       ready = r;
       net.sendReady(r);
@@ -506,6 +527,8 @@ function showLobby(): void {
     },
     onLeave: () => {
       net.leave();
+      myLoadoutChoices = [];
+      mySelectedLoadoutIndex = 0;
       void showMenu();
     },
   });

@@ -1,6 +1,7 @@
 import type { LobbyPlayer } from "../net/Client";
 import type {
   LeaderboardEntry,
+  Loadout,
   MatchResultEntry,
   PlayerState,
 } from "@gunmetal-barrage/shared";
@@ -145,6 +146,9 @@ export function renderLobby(
     onStart: () => void;
     onLeave: () => void;
     ready: boolean;
+    loadoutChoices: Loadout[];
+    selectedLoadoutIndex: number;
+    onSelectLoadout: (index: number) => void;
   },
 ): void {
   const allReady =
@@ -152,13 +156,15 @@ export function renderLobby(
     opts.players.every((p) => p.ready || p.isBot);
   const readyCount = opts.players.filter((p) => p.ready || p.isBot).length;
   const total = opts.players.length;
+  const choices = opts.loadoutChoices ?? [];
+
   root.innerHTML = `
     <div class="screen live-bg">
-      <div class="panel live-panel lobby-panel">
+      <div class="panel live-panel lobby-panel lobby-panel-wide">
         <header class="lobby-hero">
           <div class="lobby-badge">${opts.isPrivate ? "PRIVATE LOBBY" : "PUBLIC LOBBY"}</div>
           <h1 class="lobby-title">${escapeHtml(opts.title)}</h1>
-          <p class="lobby-live-hint">Live range behind you — ready up while the shells fly</p>
+          <p class="lobby-live-hint">Pick your tank, then ready up while the range fires</p>
           ${
             opts.isPrivate
               ? `<div class="join-code-plaque">
@@ -174,12 +180,66 @@ export function renderLobby(
           </div>
         </header>
 
+        <section class="char-select">
+          <h3 class="char-select-title">Choose your tank</h3>
+          <p class="char-select-sub">Three kits rolled for this lobby — inspect weapons before you ready</p>
+          <div class="char-select-grid">
+            ${
+              choices.length === 0
+                ? `<div class="char-select-empty">Rolling loadouts…</div>`
+                : choices
+                    .map((lo, i) => {
+                      const selected = i === opts.selectedLoadoutIndex;
+                      const alt = lo.secondary
+                        ? escapeHtml(lo.secondary.name)
+                        : "—";
+                      const ammo =
+                        lo.primary.id === "peashooter"
+                          ? "∞"
+                          : String(lo.primary.maxAmmo);
+                      return `
+              <button type="button" class="char-card ${selected ? "selected" : ""}" data-loadout="${i}">
+                <div class="char-card-top">
+                  <span class="char-slot">${i + 1}</span>
+                  ${selected ? `<span class="char-selected-chip">SELECTED</span>` : `<span class="char-pick-chip">SELECT</span>`}
+                </div>
+                <div class="char-tank-name">${escapeHtml(lo.name)}</div>
+                <div class="char-chassis">${escapeHtml(lo.chassis.name)}</div>
+                <div class="char-stats">
+                  <span>HP ${lo.chassis.maxHp}</span>
+                  <span>ARM ${lo.chassis.armor}</span>
+                  <span>FUEL ${lo.chassis.fuel}</span>
+                </div>
+                <div class="char-weapon">
+                  <span class="char-wpn-label">PRIMARY</span>
+                  <span class="char-wpn-name">${escapeHtml(lo.primary.name)}</span>
+                  <span class="char-wpn-meta">DMG ${lo.primary.damage} · BLAST ${lo.primary.blastRadius} · AMMO ${ammo}</span>
+                  <span class="char-wpn-sum">${escapeHtml(lo.primary.summary)}</span>
+                </div>
+                <div class="char-weapon alt">
+                  <span class="char-wpn-label">ALT · R</span>
+                  <span class="char-wpn-name">${alt}</span>
+                  ${
+                    lo.secondary
+                      ? `<span class="char-wpn-meta">DMG ${lo.secondary.damage} · BLAST ${lo.secondary.blastRadius} · AMMO ${lo.secondary.maxAmmo}</span>
+                         <span class="char-wpn-sum">${escapeHtml(lo.secondary.summary)}</span>`
+                      : `<span class="char-wpn-meta muted">No alternate weapon</span>`
+                  }
+                </div>
+              </button>`;
+                    })
+                    .join("")
+            }
+          </div>
+        </section>
+
         <div class="pilot-grid">
           ${opts.players
             .map((p) => {
               const persona = p.persona
                 ? personaLabel(p.persona as import("@gunmetal-barrage/shared").BotPersona)
                 : null;
+              const prev = p.loadoutPreview;
               return `
             <article class="pilot-card ${p.isBot ? "bot" : "human"} ${p.ready ? "is-ready" : ""}">
               <div class="pilot-card-top">
@@ -194,6 +254,14 @@ export function renderLobby(
               }
               ${p.title ? `<span class="pilot-title">${escapeHtml(p.title)}</span>` : ""}
               ${p.motto ? `<span class="pilot-motto">"${escapeHtml(p.motto)}"</span>` : ""}
+              ${
+                prev
+                  ? `<div class="pilot-kit">
+                      <span class="pilot-kit-tank">${escapeHtml(prev.chassisName)}</span>
+                      <span class="pilot-kit-gun">${escapeHtml(prev.primaryName)}${prev.secondaryName ? ` · ${escapeHtml(prev.secondaryName)}` : ""}</span>
+                    </div>`
+                  : ""
+              }
             </article>`;
             })
             .join("")}
@@ -218,12 +286,18 @@ export function renderLobby(
           opts.isHost
             ? allReady
               ? "All set — hit Start when ready."
-              : "Wait for everyone to ready (bots auto-ready)."
-            : "Ready up and wait for host to start."
-        } Each bot rolls a unique pilot.</p>
+              : "Everyone must pick a tank and ready (bots auto-ready)."
+            : "Select a tank above, then ready up and wait for the host."
+        }</p>
       </div>
     </div>
   `;
+  root.querySelectorAll("[data-loadout]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const idx = Number((btn as HTMLElement).dataset.loadout);
+      if (Number.isFinite(idx)) opts.onSelectLoadout(idx);
+    });
+  });
   root.querySelector("#btn-ready")?.addEventListener("click", () => {
     opts.onReady(!opts.ready);
   });
