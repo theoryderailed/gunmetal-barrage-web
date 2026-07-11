@@ -66,7 +66,8 @@ export function simulateBallistic(
   opts?: { dt?: number; maxSteps?: number; bounceLeft?: number; muzzleClearance?: number },
 ): ImpactResult {
   const dt = opts?.dt ?? DEFAULT_DT;
-  const maxSteps = opts?.maxSteps ?? 600;
+  // Extra steps so high arcs over tall hills can peak and land (no hard sky ceiling)
+  const maxSteps = opts?.maxSteps ?? 1200;
   const clearance = opts?.muzzleClearance ?? MUZZLE_CLEARANCE;
   let bounceLeft =
     opts?.bounceLeft ?? (input.weapon.trajectory === "bounce" ? 2 : 0);
@@ -89,6 +90,8 @@ export function simulateBallistic(
 
   const steps: BallisticStep[] = [{ x, y, z, vx, vy, vz }];
   const windAccel = input.wind * 4;
+  // Soft ceiling for sim runaway only — far above any map peak; not a detonation plane
+  const skyLimit = Math.max(world.height * 4, world.height + 200);
 
   for (let i = 0; i < maxSteps; i++) {
     // Drill: slightly reduced gravity (flatter arc / a bit more range — not a rocket)
@@ -105,17 +108,21 @@ export function simulateBallistic(
 
     steps.push({ x, y, z, vx, vy, vz });
 
-    if (
-      x < -2 ||
-      x > world.width + 2 ||
-      y < -5 ||
-      y > world.height + 30
-    ) {
+    // Arena edges / fall off the bottom — detonate or remove shell.
+    // Do NOT explode on an upper Y ceiling: high lobs over tall hills must clear.
+    if (x < -4 || x > world.width + 4 || y < -8) {
       return { hit: true, x, y, z, steps, reason: "bounds" };
+    }
+    // Pathological skyward shot (e.g. numerical runaway) — quiet timeout, no mid-air blast
+    if (y > skyLimit) {
+      return { hit: false, x, y, z, steps, reason: "timeout" };
     }
 
     // Skip solid checks near the barrel so the shell doesn't detonate on your hull/slope
     if (traveled < clearance) continue;
+
+    // Above the voxel grid is open sky — keep flying until we re-enter
+    if (y >= world.height) continue;
 
     const ix = Math.floor(x);
     const iy = Math.floor(y);
