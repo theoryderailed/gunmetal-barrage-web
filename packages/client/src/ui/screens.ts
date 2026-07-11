@@ -27,8 +27,8 @@ export function renderMenu(
   },
 ): void {
   root.innerHTML = `
-    <div class="screen">
-      <div class="panel">
+    <div class="screen live-bg">
+      <div class="panel live-panel">
         <h1>GUN METAL BARRAGE</h1>
         <p class="tagline">Procedural artillery · random biomes · questionable life choices</p>
         <p class="help menu-tip">Hold <kbd>SPACE</kbd> to charge power · release to fire · watch the debris for wind</p>
@@ -109,10 +109,11 @@ export function renderLobby(
     opts.players.length >= 1 &&
     opts.players.every((p) => p.ready || p.isBot);
   root.innerHTML = `
-    <div class="screen">
-      <div class="panel lobby-panel">
+    <div class="screen live-bg">
+      <div class="panel live-panel lobby-panel">
         <h1>${escapeHtml(opts.title)}</h1>
         <h2>${opts.isPrivate ? "Private match" : "Public lobby"}</h2>
+        <p class="lobby-live-hint">Live range in the background — get ready while the shells fly</p>
         ${
           opts.isPrivate
             ? `<div class="join-code-row">
@@ -488,8 +489,8 @@ export function renderLeaderboard(
   onBack: () => void,
 ): void {
   root.innerHTML = `
-    <div class="screen">
-      <div class="panel">
+    <div class="screen live-bg">
+      <div class="panel live-panel">
         <h1>LEADERBOARD</h1>
         <table class="results-table">
           <thead>

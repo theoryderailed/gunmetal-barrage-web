@@ -238,6 +238,20 @@ export class GameRenderer {
   }
 
   /**
+   * Soft pan used by the menu/lobby ambient demo.
+   * Keeps a wide framing while drifting across the arena.
+   */
+  panAmbient(x: number, y: number, dt: number): void {
+    if (this.animProjectile || this.isIntroPlaying()) return;
+    const k = 1 - Math.exp(-2.2 * dt);
+    this.cameraTarget.x += (x - this.cameraTarget.x) * k;
+    this.cameraTarget.y += (y - this.cameraTarget.y) * k;
+    this.cameraTarget.z = this.midZ;
+    const wide = this.fullMapCameraDistance() * 0.88;
+    this.cameraDistance += (wide - this.cameraDistance) * k;
+  }
+
+  /**
    * Intro sequence: hold wide shot → tanks drop from sky → zoom to first pilot.
    * Returns total duration in ms.
    */

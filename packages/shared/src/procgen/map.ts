@@ -131,9 +131,23 @@ const BIOMES: {
   },
 ];
 
+/** Extra name flourishes so maps feel unique even within a biome. */
+const NAME_SUFFIXES = [
+  "Gulfs",
+  "Ridges",
+  "Spires",
+  "Fissures",
+  "Overlook",
+  "Breach",
+  "Shelf",
+  "Mesa",
+  "Trench",
+  "Archipelago",
+];
+
 /**
  * Generate a 2.5D side-view arena from a seed.
- * Biome is deterministic from seed → random map each match.
+ * Multi-scale hills, gulfs, ridges, and scattered spawn pads.
  */
 export function generateMap(
   seed: number,
@@ -150,63 +164,148 @@ export function generateMap(
     ...biomePick.theme,
   };
 
-  const profile = biomeProfile(biomePick.biome, h);
+  const profile = biomeProfile(biomePick.biome, h, rng);
   const midZ = Math.floor(d / 2);
 
+  // Precompute terrain features (deterministic from seed)
+  const gulfs = makeGulfs(w, h, rng, biomePick.biome);
+  const ridges = makeRidges(w, h, rng);
+  const mesas = makeMesas(w, h, rng);
+  const trenches = makeTrenches(w, rng);
+
+  // Height profile pass
+  const surfaceY = new Int16Array(w);
   for (let x = 0; x < w; x++) {
     const nx = x / w;
-    let heightNoise = fbm2D(nx * profile.noiseScale, 0.5, seed, profile.octaves);
-    if (profile.terrace) {
-      heightNoise = Math.floor(heightNoise * profile.terrace) / profile.terrace;
-    }
-    let surface = Math.floor(profile.base + heightNoise * profile.amp);
+    let heightNoise =
+      fbm2D(nx * profile.noiseScale, 0.5, seed, profile.octaves) * profile.amp;
+    // Second octave band for irregular skyline
+    heightNoise +=
+      fbm2D(nx * profile.noiseScale * 2.3, 1.7, seed + 19, 3) *
+      profile.amp *
+      0.35;
+    // Long rolling undulation
+    heightNoise += Math.sin(nx * Math.PI * profile.rollFreq + seed * 0.001) *
+      profile.amp *
+      0.22;
 
-    if (x < 6 || x > w - 7) {
-      surface = Math.max(surface, Math.floor(h * profile.edgeBoost));
+    if (profile.terrace > 0) {
+      heightNoise =
+        Math.floor((profile.base + heightNoise) / profile.terrace) *
+          profile.terrace -
+        profile.base;
     }
 
-    // Biome-specific features
-    if (biomePick.biome === "canyon" || biomePick.biome === "volcanic") {
-      const pit = fbm2D(nx * 2.2, 2.5, seed + 7, 3);
-      if (pit < 0.4 && x > w * 0.25 && x < w * 0.75) {
-        surface -= Math.floor((0.4 - pit) * profile.pitDepth);
+    let surface = Math.floor(profile.base + heightNoise);
+
+    // Ridges (sharp peaks)
+    for (const r of ridges) {
+      const dx = Math.abs(x - r.cx);
+      if (dx < r.halfW) {
+        const t = 1 - dx / r.halfW;
+        surface += Math.floor(r.height * t * t);
       }
-    } else if (biomePick.biome === "desert") {
-      const dune = Math.sin(nx * Math.PI * 5 + seed * 0.01) * 0.5 + 0.5;
-      surface += Math.floor(dune * 6);
+    }
+
+    // Mesas (flat-top plateaus)
+    for (const m of mesas) {
+      const dx = Math.abs(x - m.cx);
+      if (dx < m.halfW) {
+        const edge = Math.min(1, (m.halfW - dx) / Math.max(2, m.ramp));
+        surface = Math.max(surface, Math.floor(m.top * edge + surface * (1 - edge * 0.4)));
+      }
+    }
+
+    // Gulfs / bays (deep cuts)
+    for (const g of gulfs) {
+      const dx = Math.abs(x - g.cx);
+      if (dx < g.halfW) {
+        const t = 1 - dx / g.halfW;
+        // Smooth bowl: deeper in the middle
+        const bowl = t * t * (3 - 2 * t);
+        surface -= Math.floor(g.depth * bowl);
+      }
+    }
+
+    // Narrow trenches (steep V cuts)
+    for (const t of trenches) {
+      const dx = Math.abs(x - t.cx);
+      if (dx < t.halfW) {
+        const u = 1 - dx / t.halfW;
+        surface -= Math.floor(t.depth * u);
+      }
+    }
+
+    // Biome flourishes
+    if (biomePick.biome === "desert") {
+      const dune = Math.sin(nx * Math.PI * 5 + seed * 0.01);
+      surface += Math.floor((dune * 0.5 + 0.5) * 8);
     } else if (biomePick.biome === "arctic") {
-      const shelf = fbm2D(nx * 3, 1.2, seed + 3, 3);
-      if (shelf > 0.55) surface += Math.floor((shelf - 0.55) * 14);
-    } else {
-      const pit = fbm2D(nx * 2, 2.5, seed + 7, 3);
-      if (pit < 0.35 && x > w * 0.3 && x < w * 0.7) {
-        surface -= Math.floor((0.35 - pit) * 14);
+      const shelf = fbm2D(nx * 3.2, 1.2, seed + 3, 3);
+      if (shelf > 0.52) surface += Math.floor((shelf - 0.52) * 16);
+    } else if (biomePick.biome === "volcanic") {
+      const caldera = fbm2D(nx * 1.8, 2.1, seed + 11, 3);
+      if (caldera < 0.38 && x > w * 0.2 && x < w * 0.8) {
+        surface -= Math.floor((0.38 - caldera) * 20);
       }
     }
 
-    surface = Math.max(4, Math.min(h - 8, surface));
+    // Keep beaches at map ends walkable but not walls
+    if (x < 8 || x > w - 9) {
+      const edgeLift = Math.floor(h * profile.edgeBoost);
+      surface = Math.max(surface, edgeLift - Math.abs(x < 8 ? x : w - 1 - x));
+    }
 
+    surface = Math.max(5, Math.min(h - 10, surface));
+    surfaceY[x] = surface;
+  }
+
+  // Optional stone bridges over deep gulfs
+  for (const g of gulfs) {
+    if (g.depth < 12 || rng() > 0.55) continue;
+    const left = Math.max(2, g.cx - g.halfW);
+    const right = Math.min(w - 3, g.cx + g.halfW);
+    const deckY =
+      Math.min(surfaceY[left]!, surfaceY[right]!) + 1 + Math.floor(rng() * 2);
+    const thickness = 1 + Math.floor(rng() * 2);
+    for (let x = left; x <= right; x++) {
+      // Leave gaps for broken bridges
+      if (rng() < 0.12) continue;
+      for (let t = 0; t < thickness; t++) {
+        const y = deckY + t;
+        if (y >= h - 2) continue;
+        for (let z = midZ - 1; z <= midZ + 1; z++) {
+          world.set(x, y, z, VoxelMaterial.Rock);
+        }
+      }
+      // Raise surface profile under deck so spawns don't sink
+      if (surfaceY[x]! < deckY) surfaceY[x] = deckY;
+    }
+  }
+
+  // Voxel fill
+  for (let x = 0; x < w; x++) {
+    const surface = surfaceY[x]!;
     for (let z = 0; z < d; z++) {
       const edgeFade = 1 - Math.abs(z - midZ) / (d * 0.55);
       const colHeight = Math.floor(surface * Math.max(0.55, edgeFade));
 
       for (let y = 0; y <= colHeight; y++) {
-        world.set(x, y, z, surfaceMaterial(biomePick.biome, y, colHeight, x, seed, rng));
+        world.set(
+          x,
+          y,
+          z,
+          surfaceMaterial(biomePick.biome, y, colHeight, x, seed, rng),
+        );
       }
 
-      // Caves (skip arctic ice shelves somewhat)
-      if (
-        biomePick.biome !== "arctic" &&
-        x > 20 &&
-        x < w - 20
-      ) {
+      // Caves
+      if (biomePick.biome !== "arctic" && x > 18 && x < w - 18) {
         for (let y = 6; y < colHeight - 4; y++) {
           const cave = fbm2D(x * 0.08, y * 0.1, seed + 42, 3);
-          const threshold =
-            biomePick.biome === "volcanic"
-              ? [0.58, 0.7]
-              : [0.62, 0.72];
-          if (cave > threshold[0]! && cave < threshold[1]!) {
+          const lo = biomePick.biome === "volcanic" ? 0.56 : 0.61;
+          const hi = biomePick.biome === "volcanic" ? 0.72 : 0.73;
+          if (cave > lo && cave < hi) {
             if (world.get(x, y, z) !== VoxelMaterial.Bedrock) {
               world.set(x, y, z, VoxelMaterial.Air);
             }
@@ -216,27 +315,28 @@ export function generateMap(
     }
   }
 
-  // Props / ruins
+  // Props / ruins / spires
   const ruinCount =
     biomePick.biome === "ruins"
-      ? 5 + Math.floor(rng() * 4)
+      ? 6 + Math.floor(rng() * 5)
       : biomePick.biome === "volcanic"
-        ? 1 + Math.floor(rng() * 2)
-        : 2 + Math.floor(rng() * 3);
+        ? 2 + Math.floor(rng() * 3)
+        : 3 + Math.floor(rng() * 4);
 
   for (let i = 0; i < ruinCount; i++) {
-    const rx = 20 + Math.floor(rng() * (w - 40));
-    const rz = midZ;
+    const rx = 16 + Math.floor(rng() * (w - 32));
+    const rz = midZ + Math.floor(rng() * 3) - 1;
     const ry = world.surfaceY(rx, rz) + 1;
-    const rw = 3 + Math.floor(rng() * 4);
-    const rh = 2 + Math.floor(rng() * 5);
+    const rw = 2 + Math.floor(rng() * 5);
+    const rh = 2 + Math.floor(rng() * 7);
+    const spire = rng() > 0.7;
     for (let dx = 0; dx < rw; dx++) {
-      for (let dy = 0; dy < rh; dy++) {
-        if (rng() > 0.22) {
+      for (let dy = 0; dy < (spire ? rh + dx : rh); dy++) {
+        if (rng() > 0.2) {
           const mat =
             biomePick.biome === "arctic"
               ? VoxelMaterial.Rock
-              : biomePick.biome === "volcanic" && rng() > 0.5
+              : biomePick.biome === "volcanic" && rng() > 0.45
                 ? VoxelMaterial.Rock
                 : VoxelMaterial.Metal;
           world.set(rx + dx, ry + dy, rz, mat);
@@ -246,18 +346,14 @@ export function generateMap(
     }
   }
 
-  // Spawns
-  const spawns: Vec2[] = [];
-  const players = Math.max(2, maxPlayers);
-  for (let i = 0; i < players; i++) {
-    const left = i % 2 === 0;
-    const slot = Math.floor(i / 2);
-    const margin = 12 + slot * 14;
-    const x = left ? margin : w - 1 - margin;
-    flattenSpawnPad(world, x, midZ, 3, biomePick.biome);
-    const y = world.surfaceY(x, midZ) + 1;
-    spawns.push({ x, y: Math.max(1, y) });
-  }
+  // Scattered spawns (not fixed left/right lanes)
+  const spawnCount = Math.max(4, maxPlayers + 3);
+  const spawns = pickScatteredSpawns(world, midZ, w, h, spawnCount, rng, biomePick.biome);
+
+  const suffix =
+    NAME_SUFFIXES[Math.floor(rng() * NAME_SUFFIXES.length)] ?? "Gulfs";
+  const mapName =
+    rng() > 0.45 ? `${biomePick.name} · ${suffix}` : biomePick.name;
 
   return {
     world,
@@ -265,8 +361,177 @@ export function generateMap(
     seed,
     biome: biomePick.biome,
     theme,
-    name: biomePick.name,
+    name: mapName,
   };
+}
+
+// ── Terrain feature generators ──────────────────────────────────────────
+
+interface Gulf {
+  cx: number;
+  halfW: number;
+  depth: number;
+}
+interface Ridge {
+  cx: number;
+  halfW: number;
+  height: number;
+}
+interface Mesa {
+  cx: number;
+  halfW: number;
+  top: number;
+  ramp: number;
+}
+interface Trench {
+  cx: number;
+  halfW: number;
+  depth: number;
+}
+
+function makeGulfs(
+  w: number,
+  h: number,
+  rng: () => number,
+  biome: MapBiome,
+): Gulf[] {
+  const bias =
+    biome === "canyon" || biome === "volcanic"
+      ? 3
+      : biome === "arctic"
+        ? 1
+        : 2;
+  const count = bias + Math.floor(rng() * 3);
+  const gulfs: Gulf[] = [];
+  for (let i = 0; i < count; i++) {
+    const cx = Math.floor(w * (0.18 + rng() * 0.64));
+    const halfW = Math.floor(8 + rng() * (biome === "canyon" ? 28 : 18));
+    const depth = Math.floor(
+      h * (biome === "canyon" ? 0.18 : 0.1) + rng() * h * 0.14,
+    );
+    // Avoid stacking identical centers
+    if (gulfs.some((g) => Math.abs(g.cx - cx) < halfW * 0.6)) continue;
+    gulfs.push({ cx, halfW, depth });
+  }
+  return gulfs;
+}
+
+function makeRidges(w: number, h: number, rng: () => number): Ridge[] {
+  const count = 1 + Math.floor(rng() * 3);
+  const ridges: Ridge[] = [];
+  for (let i = 0; i < count; i++) {
+    ridges.push({
+      cx: Math.floor(w * (0.15 + rng() * 0.7)),
+      halfW: Math.floor(5 + rng() * 12),
+      height: Math.floor(h * 0.06 + rng() * h * 0.12),
+    });
+  }
+  return ridges;
+}
+
+function makeMesas(w: number, h: number, rng: () => number): Mesa[] {
+  const count = Math.floor(rng() * 3);
+  const mesas: Mesa[] = [];
+  for (let i = 0; i < count; i++) {
+    mesas.push({
+      cx: Math.floor(w * (0.2 + rng() * 0.6)),
+      halfW: Math.floor(10 + rng() * 18),
+      top: Math.floor(h * (0.4 + rng() * 0.2)),
+      ramp: 3 + Math.floor(rng() * 5),
+    });
+  }
+  return mesas;
+}
+
+function makeTrenches(w: number, rng: () => number): Trench[] {
+  const count = Math.floor(rng() * 3);
+  const trenches: Trench[] = [];
+  for (let i = 0; i < count; i++) {
+    trenches.push({
+      cx: Math.floor(w * (0.2 + rng() * 0.6)),
+      halfW: Math.floor(3 + rng() * 6),
+      depth: Math.floor(6 + rng() * 14),
+    });
+  }
+  return trenches;
+}
+
+/**
+ * Pick spread-out surface pads so tanks (esp. bots) aren't always on map edges.
+ */
+function pickScatteredSpawns(
+  world: VoxelWorld,
+  midZ: number,
+  w: number,
+  h: number,
+  count: number,
+  rng: () => number,
+  biome: MapBiome,
+): Vec2[] {
+  type Cand = { x: number; y: number; score: number };
+  const candidates: Cand[] = [];
+
+  for (let x = 14; x < w - 14; x += 2) {
+    const y0 = world.surfaceY(x, midZ);
+    if (y0 < 6 || y0 > h - 12) continue;
+    const yL = world.surfaceY(x - 3, midZ);
+    const yR = world.surfaceY(x + 3, midZ);
+    const slope = Math.abs(yL - yR) + Math.abs(y0 - yL) * 0.5;
+    // Prefer gentle slopes, mid-high ground, not underwater gulfs
+    const heightScore = 1 - Math.abs(y0 / h - 0.4);
+    const flatScore = Math.max(0, 1 - slope / 10);
+    // Slight preference away from dead center (drama across the map)
+    const spreadScore = Math.abs(x / w - 0.5);
+    const score = flatScore * 1.4 + heightScore * 0.8 + spreadScore * 0.35 + rng() * 0.4;
+    if (flatScore < 0.25 && slope > 8) continue;
+    candidates.push({ x, y: y0 + 1, score });
+  }
+
+  // Shuffle-ish by score + noise
+  candidates.sort((a, b) => b.score - a.score);
+
+  const minDist = Math.max(18, Math.floor(w / (count + 2)));
+  const picked: Cand[] = [];
+  for (const c of candidates) {
+    if (picked.length >= count) break;
+    if (picked.some((p) => Math.abs(p.x - c.x) < minDist)) continue;
+    picked.push(c);
+  }
+
+  // Fallback: force spaced slots if we under-picked
+  while (picked.length < count) {
+    const t = (picked.length + 1) / (count + 1);
+    const x = Math.floor(14 + t * (w - 28) + (rng() - 0.5) * 10);
+    const clamped = Math.max(14, Math.min(w - 15, x));
+    if (picked.some((p) => Math.abs(p.x - clamped) < minDist * 0.6)) {
+      // nudge
+      const alt = clamped + (rng() > 0.5 ? minDist : -minDist);
+      const x2 = Math.max(14, Math.min(w - 15, alt));
+      picked.push({ x: x2, y: world.surfaceY(x2, midZ) + 1, score: 0 });
+    } else {
+      picked.push({
+        x: clamped,
+        y: world.surfaceY(clamped, midZ) + 1,
+        score: 0,
+      });
+    }
+  }
+
+  // Fisher–Yates so player order ≠ left-to-right
+  for (let i = picked.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    const tmp = picked[i]!;
+    picked[i] = picked[j]!;
+    picked[j] = tmp;
+  }
+
+  const spawns: Vec2[] = [];
+  for (const p of picked.slice(0, count)) {
+    flattenSpawnPad(world, p.x, midZ, 3 + Math.floor(rng() * 2), biome);
+    const y = world.surfaceY(p.x, midZ) + 1;
+    spawns.push({ x: p.x, y: Math.max(1, y) });
+  }
+  return spawns;
 }
 
 function pickBiome(rng: () => number) {
@@ -279,67 +544,69 @@ function pickBiome(rng: () => number) {
   return BIOMES[0]!;
 }
 
-function biomeProfile(biome: MapBiome, h: number) {
+function biomeProfile(biome: MapBiome, h: number, rng: () => number) {
+  // Per-match jitter so two meadows don't feel identical
+  const jitter = () => 0.9 + rng() * 0.25;
   switch (biome) {
     case "desert":
       return {
-        base: h * 0.32,
-        amp: h * 0.18,
-        noiseScale: 3.2,
+        base: h * 0.3 * jitter(),
+        amp: h * 0.2 * jitter(),
+        noiseScale: 2.8 + rng() * 1.2,
         octaves: 4,
         terrace: 0,
-        edgeBoost: 0.4,
-        pitDepth: 8,
+        edgeBoost: 0.38,
+        rollFreq: 2.5 + rng() * 2,
       };
     case "canyon":
       return {
-        base: h * 0.4,
-        amp: h * 0.28,
-        noiseScale: 5,
+        base: h * 0.42 * jitter(),
+        amp: h * 0.3 * jitter(),
+        noiseScale: 4.2 + rng() * 2,
         octaves: 5,
-        terrace: 5,
+        terrace: 4 + Math.floor(rng() * 3),
         edgeBoost: 0.5,
-        pitDepth: 28,
+        rollFreq: 1.8 + rng(),
       };
     case "volcanic":
       return {
-        base: h * 0.3,
-        amp: h * 0.26,
-        noiseScale: 4.5,
+        base: h * 0.3 * jitter(),
+        amp: h * 0.28 * jitter(),
+        noiseScale: 3.8 + rng() * 1.5,
         octaves: 5,
-        terrace: 4,
+        terrace: 3 + Math.floor(rng() * 3),
         edgeBoost: 0.42,
-        pitDepth: 22,
+        rollFreq: 2 + rng() * 1.5,
       };
     case "arctic":
       return {
-        base: h * 0.38,
-        amp: h * 0.16,
-        noiseScale: 2.8,
+        base: h * 0.36 * jitter(),
+        amp: h * 0.15 * jitter(),
+        noiseScale: 2.2 + rng(),
         octaves: 3,
-        terrace: 8,
+        terrace: 6 + Math.floor(rng() * 4),
         edgeBoost: 0.44,
-        pitDepth: 6,
+        rollFreq: 1.5 + rng(),
       };
     case "ruins":
       return {
-        base: h * 0.34,
-        amp: h * 0.2,
-        noiseScale: 4.2,
+        base: h * 0.34 * jitter(),
+        amp: h * 0.22 * jitter(),
+        noiseScale: 3.5 + rng() * 1.5,
         octaves: 4,
-        terrace: 6,
+        terrace: 5 + Math.floor(rng() * 3),
         edgeBoost: 0.45,
-        pitDepth: 12,
+        rollFreq: 2.2 + rng(),
       };
     default:
       return {
-        base: h * 0.35,
-        amp: h * 0.22,
-        noiseScale: 4,
+        base: h * 0.34 * jitter(),
+        amp: h * 0.24 * jitter(),
+        noiseScale: 3.2 + rng() * 1.8,
         octaves: 5,
-        terrace: 6,
+        terrace: 5 + Math.floor(rng() * 3),
         edgeBoost: 0.45,
-        pitDepth: 18,
+        rollFreq: 2 + rng() * 2,
       };
   }
 }
@@ -371,8 +638,8 @@ function surfaceMaterial(
         : VoxelMaterial.Dirt;
     case "arctic":
       if (y < colHeight * 0.25) return VoxelMaterial.Rock;
-      if (y < colHeight - 1) return VoxelMaterial.Sand; // packed snow-ish
-      return VoxelMaterial.Metal; // ice crust look via metal tint later
+      if (y < colHeight - 1) return VoxelMaterial.Sand;
+      return VoxelMaterial.Metal;
     case "ruins":
       if (y < colHeight * 0.35) return VoxelMaterial.Rock;
       if (y < colHeight - 1) {

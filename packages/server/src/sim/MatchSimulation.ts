@@ -51,14 +51,40 @@ export class MatchSimulation {
   /** Authoritative kill log — rankings count from this, not mutable counters alone */
   private killLog: { killerId: string; victimId: string }[] = [];
   private midZ: number;
+  /** Precomputed spawn pads (shuffled); players claim random unused slots. */
+  private spawns: { x: number; y: number }[];
+  private spawnClaimOrder: number[] = [];
+  private nextSpawnSlot = 0;
 
   constructor(matchSeed: number, config: Partial<MatchConfig> = {}) {
     this.config = { ...DEFAULT_MATCH_CONFIG, ...config };
     this.matchSeed = matchSeed;
     const map = generateMap(matchSeed, this.config);
     this.world = map.world;
+    this.spawns = map.spawns;
     this.midZ = Math.floor(this.config.mapDepth / 2);
     this.nextPlace = this.config.maxPlayers; // reset in start() to live player count
+    // Shuffle claim order so bots/humans don't always take left-to-right
+    const rng = createRng(hashSeed(matchSeed, "spawn-order"));
+    this.spawnClaimOrder = map.spawns.map((_, i) => i);
+    for (let i = this.spawnClaimOrder.length - 1; i > 0; i--) {
+      const j = Math.floor(rng() * (i + 1));
+      const tmp = this.spawnClaimOrder[i]!;
+      this.spawnClaimOrder[i] = this.spawnClaimOrder[j]!;
+      this.spawnClaimOrder[j] = tmp;
+    }
+  }
+
+  private takeSpawn(): { x: number; y: number } {
+    const n = this.spawns.length;
+    if (n === 0) {
+      return { x: 20 + this.players.size * 18, y: 40 };
+    }
+    const idx =
+      this.spawnClaimOrder[this.nextSpawnSlot % this.spawnClaimOrder.length] ??
+      this.nextSpawnSlot % n;
+    this.nextSpawnSlot++;
+    return this.spawns[idx] ?? this.spawns[0]!;
   }
 
   addPlayer(opts: {
@@ -79,12 +105,10 @@ export class MatchSimulation {
       loadout.name = `${identity.displayName}'s ${loadout.chassis.name.replace(/ Hull$/, "")}`;
     }
 
-    const spawnIndex = this.players.size;
-    const map = generateMap(this.matchSeed, this.config);
-    const spawn = map.spawns[spawnIndex % map.spawns.length] ?? {
-      x: 10 + spawnIndex * 20,
-      y: 40,
-    };
+    const spawn = this.takeSpawn();
+    // Small jitter so two tanks never stack perfectly on the same pad
+    const jitterRng = createRng(hashSeed(this.matchSeed, opts.id, "jitter"));
+    const jx = (jitterRng() - 0.5) * 2.4;
 
     const player: PlayerState = {
       id: opts.id,
@@ -94,7 +118,7 @@ export class MatchSimulation {
       ready: opts.isBot,
       loadout,
       identity,
-      x: spawn.x + 0.5,
+      x: spawn.x + 0.5 + jx,
       y: spawn.y + 0.2,
       facing: spawn.x < this.config.mapWidth / 2 ? 1 : -1,
       hp: loadout.chassis.maxHp,

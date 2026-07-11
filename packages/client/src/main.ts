@@ -9,6 +9,8 @@ import {
   formatWeaponBehavior,
   applyIdentityToPalette,
   generateBotIdentity,
+  generateLoadout,
+  generateMap,
   getWeaponByIndex,
   hashSeed,
   makeTestLoadout,
@@ -197,6 +199,7 @@ const net = new GameClient({
     if (mode === "lobby") showLobby();
   },
   onMatchStarted: (data) => {
+    stopAmbientDemo();
     mode = "playing";
     players = data.players.map((p) => ({
       ...p,
@@ -389,6 +392,7 @@ async function showMenu(): Promise<void> {
     rooms = [];
   }
   sfx.ui();
+  ensureAmbientDemo();
   renderMenu(uiRoot, {
     name: displayName,
     rooms,
@@ -457,6 +461,7 @@ async function showMenu(): Promise<void> {
     onShowLeaderboard: async () => {
       sfx.ui();
       mode = "leaderboard";
+      ensureAmbientDemo();
       try {
         const entries = await fetchLeaderboard();
         renderLeaderboard(uiRoot, entries, () => {
@@ -477,6 +482,7 @@ async function showMenu(): Promise<void> {
 
 function showLobby(): void {
   mode = "lobby";
+  ensureAmbientDemo();
   renderLobby(uiRoot, {
     title: lobbyMeta.title,
     joinCode: lobbyMeta.joinCode,
@@ -490,7 +496,10 @@ function showLobby(): void {
       showLobby();
     },
     onAddBot: () => net.addBot(),
-    onStart: () => net.startMatch(),
+    onStart: () => {
+      stopAmbientDemo();
+      net.startMatch();
+    },
     onLeave: () => {
       net.leave();
       void showMenu();
@@ -498,7 +507,190 @@ function showLobby(): void {
   });
 }
 
+// ── Ambient background battle (menu + lobby) ────────────────────────────
+
+let ambientActive = false;
+let ambientNextShotAt = 0;
+let ambientReloadAt = 0;
+let ambientCamPhase = 0;
+let ambientShotCount = 0;
+
+function stopAmbientDemo(): void {
+  ambientActive = false;
+}
+
+function ensureAmbientDemo(): void {
+  if (ambientActive) return;
+  if (mode !== "menu" && mode !== "lobby" && mode !== "leaderboard") return;
+  bootAmbientArena();
+}
+
+function bootAmbientArena(): void {
+  const seed = (Date.now() ^ (Math.random() * 1e9)) >>> 0;
+  const config = {
+    ...DEFAULT_MATCH_CONFIG,
+    mapWidth: 160,
+    mapHeight: 80,
+    mapDepth: 12,
+    maxPlayers: 4,
+  };
+  const map = generateMap(seed, config);
+  const demoPlayers: PlayerState[] = [];
+  const n = Math.min(3, map.spawns.length);
+  for (let i = 0; i < n; i++) {
+    const sp = map.spawns[i]!;
+    const id = `ambient-${i}`;
+    const identity = generateBotIdentity(hashSeed(seed, id));
+    const loadout = generateLoadout(hashSeed(seed, id, "lo"), config.budget);
+    loadout.palette = applyIdentityToPalette(loadout.palette, identity);
+    loadout.name = identity.displayName;
+    demoPlayers.push(
+      makePlayer(
+        id,
+        identity.displayName,
+        loadout,
+        sp.x + 0.5,
+        sp.x < config.mapWidth / 2 ? 1 : -1,
+        true,
+        identity,
+      ),
+    );
+  }
+  players = demoPlayers;
+  myId = null;
+  currentPlayerId = demoPlayers[0]?.id ?? null;
+  wind = (Math.random() - 0.5) * 1.2;
+  phase = "move";
+  postShotLock = false;
+  pendingImpact = null;
+  cancelCharge();
+  renderer.loadMatch(seed, config, players);
+  renderer.setWind(wind);
+  // Snap tanks to surface after load
+  const world = renderer.getWorld();
+  if (world) {
+    for (const p of players) {
+      const g = world.sampleGroundY(p.x, renderer.getMidZ());
+      if (g >= 0) p.y = g;
+    }
+  }
+  renderer.syncPlayers(players, { hardSnap: true });
+  renderer.frameFullMap(true);
+  ambientActive = true;
+  ambientShotCount = 0;
+  ambientNextShotAt = performance.now() + 1600;
+  ambientReloadAt = performance.now() + 45000;
+  ambientCamPhase = Math.random() * Math.PI * 2;
+}
+
+function updateAmbient(dt: number, now: number): void {
+  if (!ambientActive) return;
+  if (mode !== "menu" && mode !== "lobby" && mode !== "leaderboard") {
+    ambientActive = false;
+    return;
+  }
+
+  // Slow cinematic pan across the map
+  ambientCamPhase += dt * 0.12;
+  const mapW = 160;
+  const cx = mapW * 0.5 + Math.sin(ambientCamPhase) * mapW * 0.22;
+  const cy = 32 + Math.sin(ambientCamPhase * 0.7) * 6;
+  if (!renderer.isProjectileFlying() && !renderer.isCameraLockedOnShot()) {
+    renderer.panAmbient(cx, cy, dt);
+  }
+
+  if (now > ambientReloadAt || ambientShotCount > 8) {
+    bootAmbientArena();
+    return;
+  }
+
+  if (now < ambientNextShotAt || renderer.isProjectileFlying() || pendingImpact) {
+    return;
+  }
+
+  const alive = players.filter((p) => p.alive && p.loadout);
+  if (alive.length < 2) {
+    bootAmbientArena();
+    return;
+  }
+
+  const shooter = alive[Math.floor(Math.random() * alive.length)]!;
+  let target = alive[Math.floor(Math.random() * alive.length)]!;
+  if (target.id === shooter.id) {
+    target = alive.find((p) => p.id !== shooter.id) ?? target;
+  }
+
+  const world = renderer.getWorld();
+  if (!world || !shooter.loadout) return;
+
+  // Aim roughly at target with noise
+  const dx = target.x - shooter.x;
+  shooter.facing = dx >= 0 ? 1 : -1;
+  const dist = Math.abs(dx);
+  shooter.angle = clampAngle(35 + Math.random() * 40 + dist * 0.08);
+  shooter.power = clampPower(40 + Math.random() * 50);
+  const weapon = shooter.loadout.primary;
+  const midZ = renderer.getMidZ();
+
+  const fired = simulateWeaponFire(world, {
+    weapon,
+    tankX: shooter.x,
+    tankY: shooter.y,
+    midZ,
+    facing: shooter.facing,
+    angleDeg: shooter.angle,
+    power: shooter.power,
+    wind,
+    chassisSize: shooter.loadout.chassis.size,
+  });
+
+  ambientShotCount++;
+  ambientNextShotAt = now + 2200 + Math.random() * 1800;
+  renderer.hideTrajectory();
+  renderer.playProjectile(
+    fired.path,
+    () => {
+      if (!ambientActive) return;
+      if (fired.blasts.length) {
+        sfx.impact(fired.blasts.some((b) => b.radius >= 4.5));
+        renderer.applyTerrainOps(
+          fired.blasts.map((b) => ({
+            kind: "sphere" as const,
+            x: b.x,
+            y: b.y,
+            z: b.z,
+            radius: b.radius * 0.85,
+            material: VoxelMaterial.Air,
+          })),
+          weapon,
+        );
+      }
+      // Light vanity damage / flash
+      for (const t of players) {
+        if (!t.alive || t.id === shooter.id) continue;
+        for (const b of fired.blasts) {
+          const d = Math.hypot(t.x - b.x, t.y - b.y);
+          if (d < b.radius + 1.5) {
+            renderer.flashTank(t.id);
+            t.hp = Math.max(10, t.hp - 8);
+          }
+        }
+        const g = world.sampleGroundY(t.x, midZ);
+        if (g >= 0) t.y = g;
+      }
+      const g0 = world.sampleGroundY(shooter.x, midZ);
+      if (g0 >= 0) shooter.y = g0;
+      renderer.syncPlayers(players);
+    },
+    weapon.color ?? 0xff5522,
+    weapon,
+    fired.paths,
+  );
+  sfx.fire(shooter.power);
+}
+
 function startSandbox(): void {
+  stopAmbientDemo();
   mode = "sandbox";
   sandboxWeaponIndex = 0;
   const seed = (Date.now() >>> 0) ^ 0xdead;
@@ -508,15 +700,26 @@ function startSandbox(): void {
     mapHeight: 80,
     mapDepth: 12,
   };
+  const map = generateMap(seed, config);
   // Fixed standard hull + catalog weapon so tests are deterministic
   const loadout = makeTestLoadout(getWeaponByIndex(sandboxWeaponIndex));
   const dummyId = generateBotIdentity(hashSeed(seed, "dummy"));
   const enemyLo = makeTestLoadout(getWeaponByIndex(0));
   enemyLo.palette = applyIdentityToPalette(enemyLo.palette, dummyId);
   enemyLo.name = `${dummyId.displayName}'s Standard`;
+  const sp0 = map.spawns[0] ?? { x: 24, y: 40 };
+  const sp1 = map.spawns[1] ?? { x: 120, y: 40 };
   players = [
-    makePlayer("local", displayName, loadout, 20, 1, false, null),
-    makePlayer("dummy", dummyId.displayName, enemyLo, 120, -1, true, dummyId),
+    makePlayer("local", displayName, loadout, sp0.x + 0.5, 1, false, null),
+    makePlayer(
+      "dummy",
+      dummyId.displayName,
+      enemyLo,
+      sp1.x + 0.5,
+      -1,
+      true,
+      dummyId,
+    ),
   ];
   wind = 0.4;
   currentPlayerId = "local";
@@ -1048,7 +1251,11 @@ function loop(): void {
   const dt = Math.min(0.05, (now - lastFrame) / 1000);
   lastFrame = now;
 
-  updateInput(dt);
+  if (mode === "playing" || mode === "sandbox") {
+    updateInput(dt);
+  } else {
+    updateAmbient(dt, now);
+  }
   renderer.update();
 
   const inMatch = mode === "playing" || mode === "sandbox";
