@@ -13,8 +13,24 @@ import {
   type TurnStartPayload,
 } from "@gunmetal-barrage/shared";
 
-const DEFAULT_WS =
-  import.meta.env.VITE_SERVER_URL ?? `ws://${location.hostname}:2567`;
+/**
+ * WebSocket endpoint for Colyseus.
+ * - VITE_SERVER_URL: explicit override (dev split deploy / debugging)
+ * - production build: same-origin (ws/wss) — Railway serves client + server together
+ * - local Vite dev: Colyseus on :2567
+ */
+function resolveDefaultWs(): string {
+  if (import.meta.env.VITE_SERVER_URL) {
+    return import.meta.env.VITE_SERVER_URL;
+  }
+  if (import.meta.env.PROD) {
+    const proto = location.protocol === "https:" ? "wss:" : "ws:";
+    return `${proto}//${location.host}`;
+  }
+  return `ws://${location.hostname}:2567`;
+}
+
+const DEFAULT_WS = resolveDefaultWs();
 
 export interface LobbyPlayer {
   id: string;

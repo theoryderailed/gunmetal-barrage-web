@@ -3,10 +3,16 @@ import { WebSocketTransport } from "@colyseus/ws-transport";
 import express from "express";
 import cors from "cors";
 import { createServer } from "node:http";
+import { existsSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { MatchRoom } from "./rooms/MatchRoom.js";
 import { topLeaderboard } from "./db/leaderboard.js";
 
 const PORT = Number(process.env.PORT ?? 2567);
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+/** Built Vite client — monorepo: packages/server/dist → packages/client/dist */
+const CLIENT_DIST = path.resolve(__dirname, "../../client/dist");
 
 const app = express();
 app.use(cors());
@@ -43,6 +49,26 @@ app.get("/api/rooms", async (_req, res) => {
     res.json({ rooms: [] });
   }
 });
+
+// Production (Railway): serve the Vite client from the same origin as Colyseus.
+// Dev still uses Vite on :5173 with API proxy; this only runs when dist exists.
+if (existsSync(CLIENT_DIST)) {
+  app.use(express.static(CLIENT_DIST, { index: false }));
+  app.get("*", (req, res, next) => {
+    // Leave API, health, and Colyseus matchmake HTTP routes alone.
+    if (
+      req.path.startsWith("/api") ||
+      req.path.startsWith("/matchmake") ||
+      req.path === "/health"
+    ) {
+      return next();
+    }
+    res.sendFile(path.join(CLIENT_DIST, "index.html"), (err) => {
+      if (err) next(err);
+    });
+  });
+  console.log(`[gunmetal-barrage] serving client from ${CLIENT_DIST}`);
+}
 
 const httpServer = createServer(app);
 

@@ -12,6 +12,7 @@
     "dev:server": "npm run dev --workspace=@gunmetal-barrage/server",
     "build": "npm run build --workspace=@gunmetal-barrage/shared && npm run build --workspace=@gunmetal-barrage/server && npm run build --workspace=@gunmetal-barrage/client",
     "build:shared": "npm run build --workspace=@gunmetal-barrage/shared",
+    "start": "npm run start --workspace=@gunmetal-barrage/server",
     "typecheck": "npm run typecheck --workspaces --if-present"
   },
   "engines": {
