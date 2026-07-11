@@ -8,6 +8,7 @@ import {
   generateBotIdentity,
   generateLoadout,
   generateMap,
+  getWeaponById,
   getWeaponByIndex,
   hashSeed,
   makeTestLoadout,
@@ -753,7 +754,7 @@ function equipSandboxWeapon(index: number): void {
   me.loadout = makeTestLoadout(weapon);
   me.hp = me.loadout.chassis.maxHp;
   me.fuel = me.loadout.chassis.fuel;
-  me.primaryAmmo = weapon.maxAmmo;
+  me.primaryAmmo = weapon.id === "peashooter" ? 99 : weapon.maxAmmo;
   me.secondaryAmmo = 0;
   me.alive = true;
   // Reset dummy HP so each weapon test is clean
@@ -767,6 +768,15 @@ function equipSandboxWeapon(index: number): void {
   showToast(
     `${sandboxWeaponIndex + 1}. ${weapon.name}${note} — ${formatWeaponBehavior(weapon)}`,
   );
+}
+
+/** When limited ammo is spent, Peashooter is always available with ∞ ammo. */
+function equipPeashooterFallback(me: PlayerState): void {
+  const pea = getWeaponById("peashooter");
+  if (!pea || !me.loadout) return;
+  me.loadout = { ...me.loadout, primary: { ...pea } };
+  me.primaryAmmo = 99;
+  renderer.syncPlayers(players);
 }
 
 function makePlayer(
@@ -878,12 +888,15 @@ function fireShot(slot: "primary" | "secondary" = "primary"): void {
       return;
     }
     if (me.secondaryAmmo <= 0) {
-      showToast(`${me.loadout.secondary.name} spent`);
+      showToast(`${me.loadout.secondary.name} spent — use Space (Peashooter)`);
       return;
     }
-  } else if (me.primaryAmmo <= 0) {
-    showToast("Out of ammo");
-    return;
+  } else {
+    // Primary empty → local Peashooter fallback (server does the same)
+    if (me.primaryAmmo <= 0) {
+      equipPeashooterFallback(me);
+      showToast("Out of ammo — Peashooter equipped");
+    }
   }
 
   const power = clampPower(me.power);
@@ -898,8 +911,14 @@ function fireShot(slot: "primary" | "secondary" = "primary"): void {
       facing: me.facing,
     });
     // Optimistic ammo so HUD updates immediately
-    if (slot === "secondary") me.secondaryAmmo = Math.max(0, me.secondaryAmmo - 1);
-    else me.primaryAmmo = Math.max(0, me.primaryAmmo - 1);
+    if (slot === "secondary") {
+      me.secondaryAmmo = Math.max(0, me.secondaryAmmo - 1);
+    } else if (me.loadout.primary.id !== "peashooter") {
+      me.primaryAmmo = Math.max(0, me.primaryAmmo - 1);
+      if (me.primaryAmmo <= 0) equipPeashooterFallback(me);
+    } else {
+      me.primaryAmmo = 99;
+    }
     phase = "resolving";
     window.setTimeout(() => {
       if (
@@ -1126,12 +1145,15 @@ function fireSandbox(
     return;
   }
   if (slot === "secondary" && me.secondaryAmmo <= 0) {
-    showToast(`${weapon.name} spent`);
+    showToast(`${weapon.name} spent — use Space (Peashooter)`);
     return;
   }
-  if (slot === "primary" && me.primaryAmmo <= 0) {
-    showToast("Out of ammo");
-    return;
+  let fireWeapon = weapon;
+  if (slot === "primary") {
+    if (me.primaryAmmo <= 0 || fireWeapon.id === "peashooter") {
+      if (me.primaryAmmo <= 0) equipPeashooterFallback(me);
+      fireWeapon = me.loadout.primary;
+    }
   }
 
   const seekTargets = players
@@ -1139,7 +1161,7 @@ function fireSandbox(
     .map((t) => ({ x: t.x, y: t.y }));
 
   const fired = simulateWeaponFire(world, {
-    weapon,
+    weapon: fireWeapon,
     tankX: me.x,
     tankY: me.y,
     midZ,
@@ -1152,10 +1174,16 @@ function fireSandbox(
   });
 
   renderer.hideTrajectory();
-  if (slot === "secondary") me.secondaryAmmo = Math.max(0, me.secondaryAmmo - 1);
-  else me.primaryAmmo = Math.max(0, me.primaryAmmo - 1);
+  if (slot === "secondary") {
+    me.secondaryAmmo = Math.max(0, me.secondaryAmmo - 1);
+  } else if (fireWeapon.id !== "peashooter") {
+    me.primaryAmmo = Math.max(0, me.primaryAmmo - 1);
+    if (me.primaryAmmo <= 0) equipPeashooterFallback(me);
+  } else {
+    me.primaryAmmo = 99;
+  }
   phase = "resolving";
-  showToast(`▶ ${weapon.name} · ${formatWeaponBehavior(weapon)}`);
+  showToast(`▶ ${fireWeapon.name} · ${formatWeaponBehavior(fireWeapon)}`);
 
   // Same weapon resolution as the server (cluster splits at impact, not at the muzzle)
   renderer.playProjectile(

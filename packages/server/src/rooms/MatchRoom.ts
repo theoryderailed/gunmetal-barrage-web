@@ -365,8 +365,8 @@ export class MatchRoom extends Room {
     }
 
     this.sim.refillFuelFor(playerId);
-    // Bots never soft-lock for empty magazines mid-match
-    if (cur.isBot) this.sim.ensureBotAmmo(playerId);
+    // Empty primary → Peashooter ∞ (humans and bots)
+    this.sim.ensureDefaultWeapon(playerId);
 
     this.clearTimers();
     this.turnEpoch += 1;
@@ -406,7 +406,7 @@ export class MatchRoom extends Room {
     }
 
     try {
-      this.sim.ensureBotAmmo(cur.id);
+      this.sim.ensureDefaultWeapon(cur.id);
       const act = botAct(this.sim);
 
       // Spend a bit of fuel moving (several substeps) so bots actually reposition
@@ -482,9 +482,7 @@ export class MatchRoom extends Room {
     ) {
       slot = "primary";
     }
-    if (shooter && slot === "primary" && shooter.primaryAmmo <= 0) {
-      this.sim.ensureBotAmmo(playerId);
-    }
+    if (shooter) this.sim.ensureDefaultWeapon(playerId);
 
     const result = this.sim.fire(
       playerId,

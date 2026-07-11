@@ -10,6 +10,7 @@ import {
   fuelCostPerUnit,
   generateLoadout,
   generateMap,
+  getWeaponById,
   hashSeed,
   moveAlongTerrain,
   moveSpeed,
@@ -325,17 +326,42 @@ export class MatchSimulation {
     if (this.currentPlayerId() !== playerId) return null;
     if (this.phase !== "move" && this.phase !== "aim") return null;
 
-    const weapon =
-      weaponSlot === "secondary" && p.loadout.secondary
+    // Always have a shootable primary: empty magazine → Peashooter (∞ ammo)
+    this.ensureDefaultWeapon(playerId);
+
+    let slot = weaponSlot;
+    // Empty / missing secondary falls back to primary (possibly Peashooter)
+    if (
+      slot === "secondary" &&
+      (!p.loadout.secondary || p.secondaryAmmo <= 0)
+    ) {
+      slot = "primary";
+    }
+
+    let weapon =
+      slot === "secondary" && p.loadout.secondary
         ? p.loadout.secondary
         : p.loadout.primary;
 
-    if (weaponSlot === "primary") {
-      if (p.primaryAmmo <= 0) return null;
-      p.primaryAmmo -= 1;
-    } else {
+    if (slot === "secondary") {
       if (p.secondaryAmmo <= 0) return null;
       p.secondaryAmmo -= 1;
+    } else {
+      // Peashooter never runs dry
+      if (weapon.id === "peashooter") {
+        p.primaryAmmo = Math.max(p.primaryAmmo, 99);
+      } else {
+        if (p.primaryAmmo <= 0) {
+          this.ensureDefaultWeapon(playerId);
+          weapon = p.loadout.primary;
+        } else {
+          p.primaryAmmo -= 1;
+          if (p.primaryAmmo <= 0) {
+            // Last shell of limited gun → equip Peashooter for next shot
+            this.ensureDefaultWeapon(playerId);
+          }
+        }
+      }
     }
 
     p.angle = clampAngle(angle);
@@ -513,23 +539,31 @@ export class MatchSimulation {
   }
 
   /**
-   * Bots soft-lock when primary ammo hits 0 and fire() returns null.
-   * Top up magazines so AI can always take a shot.
+   * When primary ammo is spent, equip Peashooter with unlimited ammo.
+   * Everyone (human + bot) can always take a shot.
    */
-  ensureBotAmmo(playerId: string): void {
+  ensureDefaultWeapon(playerId: string): void {
     const p = this.players.get(playerId);
-    if (!p?.isBot || !p.loadout) return;
-    if (p.primaryAmmo <= 0) {
-      p.primaryAmmo = Math.max(1, p.loadout.primary.maxAmmo);
+    if (!p?.loadout) return;
+    if (p.primaryAmmo > 0 && p.loadout.primary.id === "peashooter") {
+      // Keep the free gun topped up
+      p.primaryAmmo = Math.max(p.primaryAmmo, 99);
+      return;
     }
-    // Don't auto-refill one-shot specials (Mini Nuke) — those stay spent
-    if (
-      p.loadout.secondary &&
-      !p.loadout.secondary.secondaryOnly &&
-      p.secondaryAmmo <= 0
-    ) {
-      p.secondaryAmmo = Math.max(1, p.loadout.secondary.maxAmmo);
-    }
+    if (p.primaryAmmo > 0) return;
+
+    const pea = getWeaponById("peashooter");
+    if (!pea) return;
+    p.loadout = {
+      ...p.loadout,
+      primary: { ...pea },
+    };
+    p.primaryAmmo = 99;
+  }
+
+  /** @deprecated use ensureDefaultWeapon */
+  ensureBotAmmo(playerId: string): void {
+    this.ensureDefaultWeapon(playerId);
   }
 
 }

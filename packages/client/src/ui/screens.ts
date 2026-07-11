@@ -346,7 +346,11 @@ export function renderHud(
       <div class="hud-box weapon-card">
         <strong>WEAPON${opts.sandbox ? ` [${(opts.weaponIndex ?? 0) + 1}/${opts.weaponCount ?? 1}]` : ""}</strong>
         <div class="weapon-name">${escapeHtml(w.name)}</div>
-        <div class="weapon-stats">DMG ${w.damage} · BLAST ${w.blastRadius} · SHELLS ${w.projectileCount} · AMMO ${me?.primaryAmmo ?? "—"}/${w.maxAmmo}</div>
+        <div class="weapon-stats">DMG ${w.damage} · BLAST ${w.blastRadius} · SHELLS ${w.projectileCount} · AMMO ${
+          w.id === "peashooter" || (me?.primaryAmmo ?? 0) >= 99
+            ? "∞"
+            : `${me?.primaryAmmo ?? "—"}/${w.maxAmmo}`
+        }</div>
         <div class="weapon-behavior">${escapeHtml(formatBehavior(w))}</div>
         <div class="weapon-summary">${escapeHtml(w.summary ?? "")}</div>
         ${

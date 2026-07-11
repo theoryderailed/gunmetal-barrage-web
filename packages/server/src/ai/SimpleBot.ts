@@ -108,13 +108,12 @@ function pickWeapon(
   self: PlayerState,
   persona: BotPersona,
 ): "primary" | "secondary" {
-  const canPrimary = (self.primaryAmmo ?? 0) > 0;
+  // Primary always available (Peashooter fallback on server)
   const canSecondary =
     !!self.loadout?.secondary && (self.secondaryAmmo ?? 0) > 0;
 
-  // Never request an empty magazine (that used to soft-lock bot turns)
+  // Never request an empty magazine
   if (!canSecondary) return "primary";
-  if (!canPrimary) return "secondary";
 
   const sec = self.loadout!.secondary!;
   // One-shot specials (Mini Nuke): use when it could decide the fight
