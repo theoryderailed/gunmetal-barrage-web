@@ -38,11 +38,16 @@ export class MatchRoom extends Room {
   private hostId: string | null = null;
   private turnTimer: ReturnType<typeof setTimeout> | null = null;
   private botTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Post-shot / bot-fire delays must be tracked so they can be cancelled. */
+  private resolveTimer: ReturnType<typeof setTimeout> | null = null;
+  private botFireTimer: ReturnType<typeof setTimeout> | null = null;
   private config: MatchConfig = { ...DEFAULT_MATCH_CONFIG };
   private roomTitle = "Gun Metal Barrage";
   private botCount = 0;
   /** Unique pilots rolled when bots are added (before match). */
   private pendingBots: PilotIdentity[] = [];
+  /** Monotonic token so stale bot/turn callbacks never act after the turn advanced. */
+  private turnEpoch = 0;
 
   onCreate(options: CreateOptions): void {
     this.maxClients = options.maxPlayers ?? DEFAULT_MATCH_CONFIG.maxPlayers;
@@ -333,11 +338,40 @@ export class MatchRoom extends Room {
 
   private startTurn(): void {
     if (!this.sim || this.sim.status !== "playing") return;
-    const playerId = this.sim.currentPlayerId();
-    if (!playerId) return;
+    // Skip dead current players (can happen after bad advance / disconnect races)
+    let playerId = this.sim.currentPlayerId();
+    let hops = 0;
+    while (
+      playerId &&
+      !this.sim.players.get(playerId)?.alive &&
+      hops < (this.sim.turnOrder.length || 1) + 2
+    ) {
+      const next = this.sim.advanceTurn();
+      if (!next) {
+        this.finishMatch();
+        return;
+      }
+      playerId = next.playerId;
+      hops++;
+    }
+    if (!playerId) {
+      this.finishMatch();
+      return;
+    }
+    const cur = this.sim.players.get(playerId);
+    if (!cur?.alive) {
+      this.finishMatch();
+      return;
+    }
 
     this.sim.refillFuelFor(playerId);
+    // Bots never soft-lock for empty magazines mid-match
+    if (cur.isBot) this.sim.ensureBotAmmo(playerId);
+
     this.clearTimers();
+    this.turnEpoch += 1;
+    const epoch = this.turnEpoch;
+
     this.broadcast(ServerMsg.TurnStart, {
       playerId,
       turnIndex: this.sim.turnIndex,
@@ -348,65 +382,132 @@ export class MatchRoom extends Room {
     this.broadcastState();
 
     this.turnTimer = setTimeout(() => {
+      if (this.turnEpoch !== epoch) return;
       this.endTurn();
     }, this.config.turnTimeSec * 1000);
 
-    const cur = this.sim.players.get(playerId);
-    if (cur?.isBot) {
+    if (cur.isBot) {
       const delay = botThinkDelayMs(cur.identity?.persona);
-      this.botTimer = setTimeout(() => this.runBotTurn(), delay);
+      this.botTimer = setTimeout(() => {
+        if (this.turnEpoch !== epoch) return;
+        this.runBotTurn(epoch);
+      }, delay);
     }
   }
 
-  private runBotTurn(): void {
+  private runBotTurn(epoch: number): void {
+    if (this.turnEpoch !== epoch) return;
     if (!this.sim || this.sim.status !== "playing") return;
     const cur = this.sim.currentPlayer();
-    if (!cur?.isBot) return;
-
-    const act = botAct(this.sim);
-    if (act.moveDir !== 0) {
-      const p = this.sim.tryMove(cur.id, act.moveDir);
-      if (p) {
-        this.broadcast(ServerMsg.PlayerMoved, {
-          id: p.id,
-          x: p.x,
-          y: p.y,
-          fuel: p.fuel,
-          facing: p.facing,
-        });
-      }
+    if (!cur?.isBot || !cur.alive) {
+      // Dead/stale current — advance so the match doesn't freeze
+      this.endTurn();
+      return;
     }
 
-    this.sim.setAim(cur.id, act.angle, act.power, act.facing);
-    this.broadcast(ServerMsg.PlayerAimed, {
-      id: cur.id,
-      angle: act.angle,
-      power: act.power,
-      facing: act.facing,
-    });
+    try {
+      this.sim.ensureBotAmmo(cur.id);
+      const act = botAct(this.sim);
 
-    setTimeout(() => {
-      this.handleFire(cur.id, {
+      // Spend a bit of fuel moving (several substeps) so bots actually reposition
+      if (act.moveDir !== 0) {
+        for (let i = 0; i < 8; i++) {
+          const p = this.sim.tryMove(cur.id, act.moveDir, 1 / 20);
+          if (!p) break;
+          if (i === 7 || i === 0) {
+            this.broadcast(ServerMsg.PlayerMoved, {
+              id: p.id,
+              x: p.x,
+              y: p.y,
+              fuel: p.fuel,
+              facing: p.facing,
+            });
+          }
+        }
+        const after = this.sim.players.get(cur.id);
+        if (after) {
+          this.broadcast(ServerMsg.PlayerMoved, {
+            id: after.id,
+            x: after.x,
+            y: after.y,
+            fuel: after.fuel,
+            facing: after.facing,
+          });
+        }
+      }
+
+      this.sim.setAim(cur.id, act.angle, act.power, act.facing);
+      this.broadcast(ServerMsg.PlayerAimed, {
+        id: cur.id,
         angle: act.angle,
         power: act.power,
-        weaponSlot: act.weaponSlot,
         facing: act.facing,
       });
-    }, 600);
+
+      this.botFireTimer = setTimeout(() => {
+        if (this.turnEpoch !== epoch) return;
+        this.handleFire(
+          cur.id,
+          {
+            angle: act.angle,
+            power: act.power,
+            weaponSlot: act.weaponSlot,
+            facing: act.facing,
+          },
+          epoch,
+        );
+      }, 550);
+    } catch (err) {
+      console.error("[bot] runBotTurn failed", err);
+      // Never leave the match stuck on a bot that threw
+      this.endTurn();
+    }
   }
 
-  private handleFire(playerId: string, message: FirePayload): void {
+  private handleFire(
+    playerId: string,
+    message: FirePayload,
+    epoch?: number,
+  ): void {
     if (!this.sim || this.sim.status !== "playing") return;
+    if (epoch !== undefined && this.turnEpoch !== epoch) return;
+
+    // If bot asked for empty secondary, fall back to primary once
+    let slot = message.weaponSlot;
+    const shooter = this.sim.players.get(playerId);
+    if (
+      shooter &&
+      slot === "secondary" &&
+      (!shooter.loadout?.secondary || shooter.secondaryAmmo <= 0)
+    ) {
+      slot = "primary";
+    }
+    if (shooter && slot === "primary" && shooter.primaryAmmo <= 0) {
+      this.sim.ensureBotAmmo(playerId);
+    }
+
     const result = this.sim.fire(
       playerId,
       message.angle,
       message.power,
-      message.weaponSlot,
+      slot,
       message.facing,
     );
-    if (!result) return;
+
+    // Failed fire used to return silently — bots with 0 ammo froze the turn.
+    if (!result) {
+      if (this.sim.currentPlayerId() === playerId) {
+        console.warn(
+          `[match] fire failed for ${playerId} slot=${slot}; ending turn`,
+        );
+        this.endTurn();
+      }
+      return;
+    }
 
     this.clearTimers();
+    // Keep epoch so delayed endTurn is still valid for this resolution
+    const resolveEpoch = this.turnEpoch;
 
     this.broadcast(ServerMsg.ProjectileSpawn, {
       ownerId: playerId,
@@ -433,12 +534,20 @@ export class MatchRoom extends Room {
     }
 
     // Let clients play projectile animation before next turn
-    setTimeout(() => this.endTurn(), Math.min(4000, 800 + result.projectilePath.length * 8));
+    const delay = Math.min(
+      4000,
+      Math.max(700, 800 + result.projectilePath.length * 8),
+    );
+    this.resolveTimer = setTimeout(() => {
+      if (this.turnEpoch !== resolveEpoch) return;
+      this.endTurn();
+    }, delay);
   }
 
   private endTurn(): void {
     if (!this.sim || this.sim.status !== "playing") return;
     this.clearTimers();
+    this.turnEpoch += 1;
     this.broadcast(ServerMsg.TurnEnd, {
       playerId: this.sim.currentPlayerId(),
     });
@@ -476,8 +585,12 @@ export class MatchRoom extends Room {
   private clearTimers(): void {
     if (this.turnTimer) clearTimeout(this.turnTimer);
     if (this.botTimer) clearTimeout(this.botTimer);
+    if (this.resolveTimer) clearTimeout(this.resolveTimer);
+    if (this.botFireTimer) clearTimeout(this.botFireTimer);
     this.turnTimer = null;
     this.botTimer = null;
+    this.resolveTimer = null;
+    this.botFireTimer = null;
   }
 
   onDispose(): void {

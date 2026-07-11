@@ -481,15 +481,16 @@ export class MatchSimulation {
     const aliveIds = this.turnOrder.filter((id) => this.players.get(id)?.alive);
     if (aliveIds.length <= 1) return null;
 
-    // Find next alive after current
-    let guard = 0;
-    do {
+    // Always land on a living pilot (old loop could exit still on a corpse)
+    const n = this.turnOrder.length;
+    for (let guard = 0; guard < n + 2; guard++) {
       this.turnIndex += 1;
-      guard++;
-    } while (
-      guard < this.turnOrder.length + 2 &&
-      !this.players.get(this.currentPlayerId()!)?.alive
-    );
+      const id = this.currentPlayerId();
+      if (id && this.players.get(id)?.alive) break;
+    }
+
+    const curId = this.currentPlayerId();
+    if (!curId || !this.players.get(curId)?.alive) return null;
 
     this.wind = this.rollWind();
     this.phase = "move";
@@ -499,7 +500,7 @@ export class MatchSimulation {
       cur.fuel = cur.loadout.chassis.fuel;
     }
     return {
-      playerId: this.currentPlayerId()!,
+      playerId: curId,
       wind: this.wind,
       turnIndex: this.turnIndex,
     };
@@ -509,6 +510,26 @@ export class MatchSimulation {
   refillFuelFor(playerId: string): void {
     const p = this.players.get(playerId);
     if (p?.loadout) p.fuel = p.loadout.chassis.fuel;
+  }
+
+  /**
+   * Bots soft-lock when primary ammo hits 0 and fire() returns null.
+   * Top up magazines so AI can always take a shot.
+   */
+  ensureBotAmmo(playerId: string): void {
+    const p = this.players.get(playerId);
+    if (!p?.isBot || !p.loadout) return;
+    if (p.primaryAmmo <= 0) {
+      p.primaryAmmo = Math.max(1, p.loadout.primary.maxAmmo);
+    }
+    // Don't auto-refill one-shot specials (Mini Nuke) — those stay spent
+    if (
+      p.loadout.secondary &&
+      !p.loadout.secondary.secondaryOnly &&
+      p.secondaryAmmo <= 0
+    ) {
+      p.secondaryAmmo = Math.max(1, p.loadout.secondary.maxAmmo);
+    }
   }
 
 }

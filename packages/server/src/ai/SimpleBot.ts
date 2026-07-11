@@ -108,17 +108,24 @@ function pickWeapon(
   self: PlayerState,
   persona: BotPersona,
 ): "primary" | "secondary" {
-  if (!self.loadout?.secondary || self.secondaryAmmo <= 0) return "primary";
-  const sec = self.loadout.secondary;
+  const canPrimary = (self.primaryAmmo ?? 0) > 0;
+  const canSecondary =
+    !!self.loadout?.secondary && (self.secondaryAmmo ?? 0) > 0;
+
+  // Never request an empty magazine (that used to soft-lock bot turns)
+  if (!canSecondary) return "primary";
+  if (!canPrimary) return "secondary";
+
+  const sec = self.loadout!.secondary!;
   // One-shot specials (Mini Nuke): use when it could decide the fight
   if (sec.secondaryOnly || sec.id === "nuke_lite") {
-    const hpRatio = self.hp / Math.max(1, self.loadout.chassis.maxHp);
+    const hpRatio = self.hp / Math.max(1, self.loadout!.chassis.maxHp);
     if (persona === "reckless") return Math.random() < 0.65 ? "secondary" : "primary";
     if (hpRatio < 0.4) return Math.random() < 0.7 ? "secondary" : "primary";
     return Math.random() < 0.25 ? "secondary" : "primary";
   }
   // Prefer secondary when it matches persona fantasy
-  if (persona === "reckless" && sec.blastRadius >= 4 && self.secondaryAmmo > 0) {
+  if (persona === "reckless" && sec.blastRadius >= 4) {
     return Math.random() < 0.55 ? "secondary" : "primary";
   }
   if (persona === "artillery" && sec.trajectory === "lob") {
@@ -190,16 +197,37 @@ function findAim(
 
   let best = { angle: 45, power: 50, score: Infinity };
 
+  // Homing: aim roughly at target — guidance steers the rest
+  if (weapon.trajectory === "homing") {
+    const dx = target.x - self.x;
+    const dy = target.y - self.y;
+    const dist = Math.hypot(dx, dy);
+    const baseAngle = clampAngle(
+      (Math.atan2(Math.max(4, dy + dist * 0.15), Math.abs(dx) + 0.01) * 180) /
+        Math.PI,
+    );
+    const basePower = clampPower(35 + dist * 0.55);
+    return {
+      angle: clampAngle(baseAngle + (Math.random() * 2 - 1) * (1 - skill) * 10),
+      power: clampPower(basePower + (Math.random() * 2 - 1) * (1 - skill) * 12),
+    };
+  }
+
   for (let angle = angleMin; angle <= angleMax; angle += stepA) {
     for (let power = powerMin; power <= powerMax; power += stepP) {
-      const pts = previewTrajectory(world, {
-        origin,
-        angleDeg: angle,
-        power,
-        facing,
-        wind,
-        weapon,
-      });
+      let pts;
+      try {
+        pts = previewTrajectory(world, {
+          origin,
+          angleDeg: angle,
+          power,
+          facing,
+          wind,
+          weapon,
+        });
+      } catch {
+        continue;
+      }
       const last = pts[pts.length - 1];
       if (!last) continue;
       let dist = Math.hypot(last.x - target.x, last.y - target.y);
