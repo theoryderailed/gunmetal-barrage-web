@@ -136,7 +136,10 @@ export class MatchRoom extends Room {
     });
 
     this.onMessage(ClientMsg.Pass, (client) => {
-      if (!this.sim || this.sim.currentPlayerId() !== client.sessionId) return;
+      if (!this.sim || this.sim.status !== "playing") return;
+      if (this.sim.currentPlayerId() !== client.sessionId) return;
+      // Don't pass mid-shell (would skip resolve / double-advance)
+      if (this.sim.phase !== "move" && this.sim.phase !== "aim") return;
       this.endTurn();
     });
 

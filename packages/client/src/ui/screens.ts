@@ -250,7 +250,6 @@ export function renderHud(
     weaponCount?: number;
     charging?: boolean;
     mapName?: string;
-    onPass?: () => void;
   },
 ): void {
   const me = opts.players.find((p) => p.id === opts.meId);
@@ -384,10 +383,8 @@ export function renderHud(
       </div>
     </div>
   `;
-
-  root.querySelector("#btn-pass")?.addEventListener("click", () => {
-    opts.onPass?.();
-  });
+  // Pass button: do not bind click here — HUD is rebuilt ~10×/s and that
+  // destroys the node mid-click. main.ts uses pointerdown delegation on #ui-root.
 }
 
 function formatBehavior(w: {

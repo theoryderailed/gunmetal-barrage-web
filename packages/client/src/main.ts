@@ -98,6 +98,8 @@ const keys = new Set<string>();
 let charging = false;
 /** +1 filling, -1 draining (Worms-style bounce at max/min). */
 let chargeDir = 1;
+/** After a real shell is spawned, lock move until the next turn starts. */
+let postShotLock = false;
 /** Power units per second while holding fire. */
 const CHARGE_RATE = 75;
 
@@ -204,6 +206,7 @@ const net = new GameClient({
     wind = data.wind;
     myId = net.sessionId;
     pendingImpact = null;
+    postShotLock = false;
     cancelCharge();
     renderer.loadMatch(data.matchSeed, data.config, players);
     renderer.setWind(data.wind);
@@ -222,6 +225,7 @@ const net = new GameClient({
   },
   onTurnStart: (data) => {
     cancelCharge();
+    postShotLock = false;
     currentPlayerId = data.playerId;
     wind = data.wind;
     phase = data.phase;
@@ -287,6 +291,7 @@ const net = new GameClient({
     const weapon = shooter?.loadout?.primary ?? null;
     pendingWeapon = weapon;
     phase = "resolving";
+    if (data.ownerId === myId) postShotLock = true;
     const color = weapon?.color ?? 0xff5522;
     const wname = weapon?.name ?? "Shell";
     showToast(`Fired ${wname}`);
@@ -601,10 +606,30 @@ function showBanner(msg: string, ms = 1500): void {
   bannerUntil = performance.now() + ms;
 }
 
+/** True while a shell is mid-flight or impact is still being applied. */
+function shotInProgress(): boolean {
+  return renderer.isProjectileFlying() || pendingImpact !== null;
+}
+
+/**
+ * Clear sticky "resolving" when nothing is in the air and we never locked a real shot.
+ * (Optimistic fire with no projectile used to freeze move + pass for the whole turn.)
+ */
+function recoverStickyPhase(): void {
+  if (postShotLock) return;
+  if (phase === "resolving" && !shotInProgress()) {
+    phase = "move";
+  }
+}
+
 function passTurn(): void {
   if (mode !== "playing") return;
   if (currentPlayerId !== myId) return;
-  if (renderer.isProjectileFlying()) return;
+  if (shotInProgress() || postShotLock) {
+    showToast("Wait for shell to land");
+    return;
+  }
+  recoverStickyPhase();
   cancelCharge();
   net.pass();
   showToast("Turn passed");
@@ -615,7 +640,8 @@ function canBeginCharge(): boolean {
   if (mode !== "playing" && mode !== "sandbox") return false;
   if (mode === "playing" && currentPlayerId !== myId) return false;
   if (renderer.isIntroPlaying()) return false;
-  if (phase === "resolving" || renderer.isProjectileFlying()) return false;
+  if (shotInProgress() || postShotLock) return false;
+  recoverStickyPhase();
   const me = players.find((p) => p.id === myId);
   if (!me?.alive) return false;
   return true;
@@ -671,17 +697,14 @@ function releaseFire(): void {
   }
 
   // Shell still in air from previous shot — keep power and tell player
-  if (renderer.isProjectileFlying()) {
+  if (shotInProgress()) {
     sfx.stopCharge();
     me.power = power; // keep last charged value for next try
     showToast("Wait for shell to land");
     return;
   }
 
-  // If phase was stuck on resolving but nothing is flying, recover
-  if (phase === "resolving" && !renderer.isProjectileFlying()) {
-    phase = "move";
-  }
+  recoverStickyPhase();
 
   me.power = power;
   sfx.fire(power);
@@ -693,8 +716,14 @@ function releaseFire(): void {
       weaponSlot: "primary",
       facing: me.facing,
     });
-    // Optimistic local phase so we don't double-charge before server projectile arrives
+    // Soft lock until projectile arrives; recoverStickyPhase unlocks if server rejects
     phase = "resolving";
+    // If no projectile message within a beat, unlock so move/pass aren't soft-locked
+    window.setTimeout(() => {
+      if (phase === "resolving" && !shotInProgress() && currentPlayerId === myId) {
+        phase = "move";
+      }
+    }, 900);
   } else {
     fireSandbox(me);
   }
@@ -814,9 +843,19 @@ function updateInput(dt: number): void {
     return;
   }
 
-  // Hold Space: always update charge power even if phase is sticky
+  // Missed keyup (tab, OS steal, etc.) used to leave charging=true forever → move freeze
+  if (charging && !keys.has("Space")) {
+    releaseFire();
+  }
+
+  // Pass before shot-lock so sticky phase never eats the key
+  if (keys.has("KeyP")) {
+    keys.delete("KeyP");
+    passTurn();
+  }
+
+  // Hold Space: update charge power
   if (charging) {
-    // Only abort charge if we truly can't finish the shot
     if (mode === "playing" && currentPlayerId !== myId) {
       cancelCharge({ silent: true });
     } else if (!me.alive) {
@@ -834,18 +873,18 @@ function updateInput(dt: number): void {
     }
   }
 
-  // No move/aim while shell is in the air (charge release still handled on keyup)
-  if (renderer.isProjectileFlying()) return;
-  // Recover stuck resolving phase when nothing is flying
-  if (phase === "resolving") {
-    // wait for projectile message / sandbox callback — don't block charge update above
-    if (!charging) return;
+  // Hard lock only while a shell is actually resolving (or post-shot until next turn)
+  if (shotInProgress() || postShotLock) {
+    renderer.hideTrajectory();
+    return;
   }
+
+  recoverStickyPhase();
 
   let dirty = false;
   const mobility = me.loadout?.chassis.mobility ?? 1;
-  // Don't drive while charging power (hold-space)
-  const canMove = !charging && phase !== "resolving";
+  // Don't drive while holding charge (A/D resume as soon as Space is released / keyup recovered)
+  const canMove = !charging;
 
   if (canMove && (keys.has("KeyA") || keys.has("ArrowLeft"))) {
     if (applyLocalMove(me, -1, dt, mobility)) {
@@ -885,18 +924,13 @@ function updateInput(dt: number): void {
     lastAimSend = performance.now();
   }
 
-  if (keys.has("KeyP")) {
-    keys.delete("KeyP");
-    passTurn();
-  }
-
   if (dirty) renderer.syncPlayers(players);
 
   // Don't re-center on the tank while the shell is mid-flight
   if (!renderer.isCameraLockedOnShot() && (isMyTurn || mode === "sandbox")) {
     renderer.showTrajectory(me, wind);
     renderer.focusPlayer(me);
-  } else if (renderer.isProjectileFlying()) {
+  } else if (shotInProgress()) {
     renderer.hideTrajectory();
   }
 }
@@ -1054,7 +1088,6 @@ function loop(): void {
         weaponCount: WEAPON_POOL.length,
         charging,
         mapName: renderer.getMapName(),
-        onPass: passTurn,
       });
     }
   } else {
@@ -1064,6 +1097,16 @@ function loop(): void {
 
   requestAnimationFrame(loop);
 }
+
+// Pass uses pointerdown (not click): HUD innerHTML rebuilds ~10×/s and would
+// destroy the button between mousedown and mouseup, so click never fired.
+uiRoot.addEventListener("pointerdown", (e) => {
+  const t = e.target as HTMLElement | null;
+  if (t?.closest?.("#btn-pass")) {
+    e.preventDefault();
+    passTurn();
+  }
+});
 
 void showMenu();
 loop();
