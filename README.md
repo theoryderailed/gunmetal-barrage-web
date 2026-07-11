@@ -69,12 +69,16 @@ One Railway service runs **Colyseus + Express + the built client** on the same o
 
 1. Push this repo to GitHub.
 2. [Railway](https://railway.app) → **New Project** → **Deploy from GitHub** → select the repo.
-3. Leave **Root Directory** empty (monorepo root).
-4. Railway reads `railway.toml`:
+3. Use **one service** for the whole app (not separate client + server services).
+4. Leave **Root Directory** empty (monorepo root). If Railway auto-created `@gunmetal-barrage/client` and `@gunmetal-barrage/server` services, delete/disable the extras and keep a single service pointed at the repo root.
+5. Railway reads `railway.toml`:
    - **Build:** `npm ci && npm run build`
    - **Start:** `npm start`
    - **Healthcheck:** `GET /health`
-5. Deploy. Open the public URL — the game UI and WebSocket share the same host.
+6. Deploy. Open the public URL — the game UI and WebSocket share the same host.
+
+**Do not** set Root Directory to `packages/client` or `packages/server` — workspace packages need the monorepo root install.  
+**Vercel** will fail for this repo (no Node/Colyseus runtime). Disconnect Vercel or ignore those checks; Railway is the intended host.
 
 ### Environment
 

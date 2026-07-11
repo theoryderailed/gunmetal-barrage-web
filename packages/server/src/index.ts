@@ -80,6 +80,6 @@ const gameServer = new Server({
 
 gameServer.define("match", MatchRoom).enableRealtimeListing();
 
-httpServer.listen(PORT, () => {
-  console.log(`[gunmetal-barrage] server listening on http://localhost:${PORT}`);
+httpServer.listen(PORT, "0.0.0.0", () => {
+  console.log(`[gunmetal-barrage] server listening on http://0.0.0.0:${PORT}`);
 });
