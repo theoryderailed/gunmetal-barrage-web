@@ -53,7 +53,9 @@ npm run dev:server   # terminal 1 — http://localhost:2567
 npm run dev:client   # terminal 2 — http://localhost:5173
 ```
 
-For a single-process production build (same as Railway):
+Open **http://localhost:5173** for day-to-day development. Production is Railway on `main` — do not use prod as a sandbox.
+
+For a single-process production-like build (same shape as Railway):
 
 ```bash
 npm install
@@ -62,6 +64,7 @@ npm start
 # open http://localhost:2567
 ```
 
+**Full workflow (local test → ship to prod, agent-safe):** see **[docs/dev-and-deploy.md](docs/dev-and-deploy.md)**.
 ## Controls
 
 | Input | Action |
@@ -91,6 +94,8 @@ npm start
 ## Deploy (Railway)
 
 **Production:** [https://gunmetal-barrageserver-production.up.railway.app/](https://gunmetal-barrageserver-production.up.railway.app/)
+
+**Develop locally first; merge to `main` only when ready.** Step-by-step local testing, Git flow, agent rules, and post-deploy checks: **[docs/dev-and-deploy.md](docs/dev-and-deploy.md)**.
 
 One Railway service runs **Colyseus + Express + the built Vite client** on the same host.
 
