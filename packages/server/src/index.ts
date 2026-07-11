@@ -13,6 +13,7 @@ const PORT = Number(process.env.PORT ?? 2567);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 /** Built Vite client — monorepo: packages/server/dist → packages/client/dist */
 const CLIENT_DIST = path.resolve(__dirname, "../../client/dist");
+// Production build is monorepo-root `npm run build` (see railway.toml). Never re-run `npm ci` in the build phase.
 
 const app = express();
 app.use(cors());
