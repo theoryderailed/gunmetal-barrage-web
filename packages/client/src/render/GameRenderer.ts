@@ -25,6 +25,32 @@ type FlightShell = {
   path: { x: number; y: number; z: number }[];
 };
 
+/** Fraction of the simulated path shown while aiming (direction hint only). */
+const AIM_PREVIEW_FRACTION = 0.28;
+/** Cap preview length in world units so long shots don't leak the landing. */
+const AIM_PREVIEW_MAX_DIST = 26;
+
+/**
+ * Keep only the early arc so players read angle/power without a free reticle.
+ */
+function clipAimPreview(
+  path: { x: number; y: number; z: number }[],
+): { x: number; y: number; z: number }[] {
+  if (path.length < 2) return path;
+  const byFrac = Math.max(6, Math.floor(path.length * AIM_PREVIEW_FRACTION));
+  let dist = 0;
+  let byDist = 1;
+  for (let i = 1; i < path.length; i++) {
+    const a = path[i - 1]!;
+    const b = path[i]!;
+    dist += Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z);
+    byDist = i + 1;
+    if (dist >= AIM_PREVIEW_MAX_DIST) break;
+  }
+  const n = Math.min(path.length, byFrac, byDist);
+  return path.slice(0, Math.max(2, n));
+}
+
 export class GameRenderer {
   readonly scene = new THREE.Scene();
   readonly camera: THREE.PerspectiveCamera;
@@ -557,8 +583,8 @@ export class GameRenderer {
   }
 
   /**
-   * Aim ghost uses full weapon simulation so lob / drill / bounce / cluster
-   * previews match what will actually fire.
+   * Aim guide: only the first portion of the arc (muzzle intent).
+   * No impact rings / full path — that made wind + power trivial.
    */
   showTrajectory(player: PlayerState, wind: number): void {
     if (!this.world || !player.loadout) {
@@ -577,7 +603,7 @@ export class GameRenderer {
       wind,
       chassisSize: player.loadout.chassis.size,
     });
-    const pts = fired.path;
+    const pts = clipAimPreview(fired.path);
     if (pts.length < 2) {
       this.hideTrajectory();
       return;
@@ -599,7 +625,7 @@ export class GameRenderer {
     const mat = this.trajectoryLine.material as THREE.LineDashedMaterial;
     const col = weapon.color ?? 0xffe066;
     mat.color.setHex(col);
-    mat.opacity = 1;
+    mat.opacity = 0.72;
     const style = shellStyleFor(weapon);
     if (style === "bounce") {
       mat.dashSize = 0.55;
@@ -614,16 +640,16 @@ export class GameRenderer {
       mat.dashSize = 1.6;
       mat.gapSize = 0.5;
     } else {
-      mat.dashSize = 1.2;
-      mat.gapSize = 0.7;
+      mat.dashSize = 1.0;
+      mat.gapSize = 0.85;
     }
     this.trajectoryLine.visible = true;
 
-    // Ghost secondary paths for triple
+    // Optional short secondary fans for triple — same clipped length, no impact dots
     this.clearTrajectoryMarkers();
     if (fired.paths.length > 1) {
       for (let pi = 1; pi < fired.paths.length; pi++) {
-        const sub = fired.paths[pi]!;
+        const sub = clipAimPreview(fired.paths[pi]!);
         if (sub.length < 2) continue;
         const pos = new Float32Array(sub.length * 3);
         for (let i = 0; i < sub.length; i++) {
@@ -638,39 +664,11 @@ export class GameRenderer {
           new THREE.LineBasicMaterial({
             color: col,
             transparent: true,
-            opacity: 0.55,
+            opacity: 0.35,
           }),
         );
         this.trajectoryMarkers.add(line);
       }
-    }
-
-    // Impact markers
-    for (const b of fired.blasts) {
-      const marker = new THREE.Mesh(
-        new THREE.RingGeometry(b.radius * 0.5, b.radius * 0.85, 20),
-        new THREE.MeshBasicMaterial({
-          color: col,
-          transparent: true,
-          opacity: 0.75,
-          side: THREE.DoubleSide,
-          depthWrite: false,
-        }),
-      );
-      marker.rotation.x = -Math.PI / 2;
-      marker.position.set(b.x, b.y + 0.2, b.z);
-      this.trajectoryMarkers.add(marker);
-
-      const core = new THREE.Mesh(
-        new THREE.SphereGeometry(style === "triple" ? 0.55 : 0.4, 8, 8),
-        new THREE.MeshBasicMaterial({
-          color: 0xffffff,
-          transparent: true,
-          opacity: 0.95,
-        }),
-      );
-      core.position.set(b.x, b.y + 0.5, b.z);
-      this.trajectoryMarkers.add(core);
     }
     this.trajectoryMarkers.visible = this.trajectoryMarkers.children.length > 0;
   }
