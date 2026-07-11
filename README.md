@@ -48,8 +48,8 @@ npm run dev:client   # terminal 2 — http://localhost:5173
 |-------|--------|
 | A / D | Move |
 | W / S | Aim angle |
-| Hold Space | Charge power |
-| Release Space | Fire |
+| Q / E | Lower / raise power |
+| Space | Fire (current power) |
 | F | Flip facing |
 | P | Pass turn |
 | 1–7 | Sandbox weapon select |

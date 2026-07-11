@@ -607,11 +607,6 @@ button:disabled {
   min-width: 180px;
 }
 
-.aim-box.charging {
-  border-color: var(--accent);
-  box-shadow: 0 0 12px rgba(255, 107, 45, 0.45);
-}
-
 .power-label {
   font-family: "Press Start 2P", monospace;
   font-size: 10px;
@@ -626,6 +621,53 @@ button:disabled {
   width: 100%;
   margin-bottom: 4px;
   box-shadow: inset 2px 2px 0 #000;
+}
+
+.power-controls {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+  margin: 8px 0 6px;
+}
+
+.btn-power {
+  font-family: "Press Start 2P", monospace;
+  font-size: 12px;
+  min-width: 40px;
+  padding: 10px 8px;
+  background: #2a3548;
+  color: var(--text);
+  border: 2px solid #000;
+  box-shadow: 2px 2px 0 #000;
+  cursor: pointer;
+}
+
+.btn-power:hover:not(:disabled) {
+  background: var(--accent-2);
+  color: #0a1020;
+}
+
+.btn-fire {
+  flex: 1;
+  font-family: "Press Start 2P", monospace;
+  font-size: 11px;
+  padding: 10px 12px;
+  background: var(--accent);
+  color: #120800;
+  border: 2px solid #000;
+  box-shadow: 2px 2px 0 #000;
+  cursor: pointer;
+  letter-spacing: 0.06em;
+}
+
+.btn-fire:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
+.btn-power:disabled,
+.btn-fire:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .power-bar > i {

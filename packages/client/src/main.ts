@@ -1,7 +1,5 @@
 import {
   DEFAULT_MATCH_CONFIG,
-  MAX_POWER,
-  MIN_POWER,
   VoxelMaterial,
   WEAPON_POOL,
   clampAngle,
@@ -96,14 +94,12 @@ let bannerUntil = 0;
 let pendingWeapon: WeaponDef | null = null;
 const keys = new Set<string>();
 
-/** Hold-to-charge fire: Space down charges, release fires. */
-let charging = false;
-/** +1 filling, -1 draining (Worms-style bounce at max/min). */
-let chargeDir = 1;
 /** After a real shell is spawned, lock move until the next turn starts. */
 let postShotLock = false;
-/** Power units per second while holding fire. */
-const CHARGE_RATE = 75;
+/** Power units per second while holding Q/E. */
+const POWER_ADJUST_RATE = 55;
+/** Comfortable default power at turn start (not min). */
+const DEFAULT_POWER = 50;
 
 /** Active in-flight shot waiting for impact resolution. */
 let pendingImpact: PendingImpact | null = null;
@@ -210,7 +206,6 @@ const net = new GameClient({
     myId = net.sessionId;
     pendingImpact = null;
     postShotLock = false;
-    cancelCharge();
     renderer.loadMatch(data.matchSeed, data.config, players);
     renderer.setWind(data.wind);
     // Full map → drop-ins → zoom to first pilot
@@ -227,7 +222,6 @@ const net = new GameClient({
     }, 3200);
   },
   onTurnStart: (data) => {
-    cancelCharge();
     postShotLock = false;
     currentPlayerId = data.playerId;
     wind = data.wind;
@@ -237,7 +231,7 @@ const net = new GameClient({
     renderer.setWind(data.wind);
     const p = players.find((x) => x.id === data.playerId);
     if (p) {
-      p.power = MIN_POWER;
+      p.power = DEFAULT_POWER;
       // Full fuel every turn (authoritative; also local for HUD)
       if (p.loadout) p.fuel = p.loadout.chassis.fuel;
     }
@@ -249,7 +243,7 @@ const net = new GameClient({
     if (data.playerId === myId) {
       showBanner("YOUR TURN", 1600);
       showToast(
-        `Your turn · full fuel · hold SPACE to charge · ${data.timeSec}s`,
+        `Your turn · Q/E power · SPACE fire · ${data.timeSec}s`,
       );
     } else {
       showBanner(`${p?.name ?? "Enemy"}'s turn`, 1400);
@@ -563,7 +557,6 @@ function bootAmbientArena(): void {
   phase = "move";
   postShotLock = false;
   pendingImpact = null;
-  cancelCharge();
   renderer.loadMatch(seed, config, players);
   renderer.setWind(wind);
   // Snap tanks to surface after load
@@ -788,7 +781,7 @@ function makePlayer(
     hp: loadout!.chassis.maxHp,
     fuel: loadout!.chassis.fuel,
     angle: 45,
-    power: MIN_POWER,
+    power: DEFAULT_POWER,
     primaryAmmo: loadout!.primary.maxAmmo,
     secondaryAmmo: loadout!.secondary?.maxAmmo ?? 0,
     kills: 0,
@@ -833,13 +826,12 @@ function passTurn(): void {
     return;
   }
   recoverStickyPhase();
-  cancelCharge();
   net.pass();
   showToast("Turn passed");
 }
 
-/** Can we start a new charge? (stricter) */
-function canBeginCharge(): boolean {
+/** Can we fire with the current power meter? */
+function canFire(): boolean {
   if (mode !== "playing" && mode !== "sandbox") return false;
   if (mode === "playing" && currentPlayerId !== myId) return false;
   if (renderer.isIntroPlaying()) return false;
@@ -850,65 +842,26 @@ function canBeginCharge(): boolean {
   return true;
 }
 
-function beginCharge(): void {
-  if (!canBeginCharge() || charging) return;
+function adjustPower(delta: number): void {
   const me = players.find((p) => p.id === myId);
-  if (!me) return;
-  charging = true;
-  chargeDir = 1;
-  me.power = MIN_POWER;
-  sfx.chargeStart();
+  if (!me?.alive) return;
+  if (mode === "playing" && currentPlayerId !== myId) return;
+  if (shotInProgress() || postShotLock) return;
+  me.power = clampPower(me.power + delta);
   renderer.syncPlayers(players);
 }
 
-function cancelCharge(opts?: { silent?: boolean }): void {
-  if (!charging) return;
-  charging = false;
-  chargeDir = 1;
-  sfx.stopCharge();
-  const me = players.find((p) => p.id === myId);
-  if (me) {
-    me.power = MIN_POWER;
-    renderer.syncPlayers(players);
+/** Single-press fire at current power (no hold-to-charge). */
+function fireShot(): void {
+  if (!canFire()) {
+    if (shotInProgress() || postShotLock) showToast("Wait for shell to land");
+    return;
   }
-  if (!opts?.silent) {
-    // no toast spam on blur
-  }
-}
-
-function releaseFire(): void {
-  if (!charging) return;
 
   const me = players.find((p) => p.id === myId);
-  // Capture power while still charging
-  const power = clampPower(me?.power ?? MIN_POWER);
+  if (!me || !me.alive) return;
 
-  charging = false;
-  chargeDir = 1;
-
-  if (!me || !me.alive) {
-    sfx.stopCharge();
-    return;
-  }
-
-  // Lost the turn mid-charge
-  if (mode === "playing" && currentPlayerId !== myId) {
-    sfx.stopCharge();
-    me.power = MIN_POWER;
-    showToast("Turn ended — shot canceled");
-    return;
-  }
-
-  // Shell still in air from previous shot — keep power and tell player
-  if (shotInProgress()) {
-    sfx.stopCharge();
-    me.power = power; // keep last charged value for next try
-    showToast("Wait for shell to land");
-    return;
-  }
-
-  recoverStickyPhase();
-
+  const power = clampPower(me.power);
   me.power = power;
   sfx.fire(power);
 
@@ -919,11 +872,14 @@ function releaseFire(): void {
       weaponSlot: "primary",
       facing: me.facing,
     });
-    // Soft lock until projectile arrives; recoverStickyPhase unlocks if server rejects
     phase = "resolving";
-    // If no projectile message within a beat, unlock so move/pass aren't soft-locked
     window.setTimeout(() => {
-      if (phase === "resolving" && !shotInProgress() && currentPlayerId === myId) {
+      if (
+        phase === "resolving" &&
+        !shotInProgress() &&
+        !postShotLock &&
+        currentPlayerId === myId
+      ) {
         phase = "move";
       }
     }, 900);
@@ -933,22 +889,20 @@ function releaseFire(): void {
 }
 
 window.addEventListener("keydown", (e) => {
-  // Ignore key-repeat for Space so charge only starts once
-  if (e.code === "Space" && e.repeat) {
+  // Space: single fire on press (ignore key-repeat)
+  if (e.code === "Space") {
     e.preventDefault();
+    if (e.repeat) return;
+    keys.add(e.code);
+    fireShot();
     return;
   }
   keys.add(e.code);
   if (e.code === "Escape") {
-    if (charging) {
-      cancelCharge();
-      e.preventDefault();
-      return;
-    }
     if (mode === "sandbox") void showMenu();
   }
-  // Sandbox weapon select: 1–7, [ ] cycle (disabled while charging)
-  if (mode === "sandbox" && !charging) {
+  // Sandbox weapon select: 1–7, [ ] cycle
+  if (mode === "sandbox") {
     if (e.code.startsWith("Digit")) {
       const n = Number(e.code.replace("Digit", ""));
       if (n >= 1 && n <= WEAPON_POOL.length) {
@@ -965,11 +919,6 @@ window.addEventListener("keydown", (e) => {
       e.preventDefault();
     }
   }
-  if (e.code === "Space") {
-    e.preventDefault();
-    // Resume audio on first gesture; then charge
-    beginCharge();
-  }
   // prevent page scroll on game keys
   if (
     ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.code)
@@ -979,14 +928,7 @@ window.addEventListener("keydown", (e) => {
 });
 window.addEventListener("keyup", (e) => {
   keys.delete(e.code);
-  if (e.code === "Space") {
-    e.preventDefault();
-    releaseFire();
-  }
-});
-// Blur: cancel charge without firing (e.g. tab switch). Don't reset power toast.
-window.addEventListener("blur", () => {
-  if (charging) cancelCharge({ silent: true });
+  if (e.code === "Space") e.preventDefault();
 });
 
 canvas.addEventListener("pointerdown", (e) => {
@@ -1041,39 +983,13 @@ function updateInput(dt: number): void {
   if (!me || !me.alive) return;
   const isMyTurn = currentPlayerId === myId;
   if (!isMyTurn && mode === "playing") {
-    // Lost turn while charging — cancel cleanly
-    if (charging) cancelCharge({ silent: true });
     return;
-  }
-
-  // Missed keyup (tab, OS steal, etc.) used to leave charging=true forever → move freeze
-  if (charging && !keys.has("Space")) {
-    releaseFire();
   }
 
   // Pass before shot-lock so sticky phase never eats the key
   if (keys.has("KeyP")) {
     keys.delete("KeyP");
     passTurn();
-  }
-
-  // Hold Space: update charge power
-  if (charging) {
-    if (mode === "playing" && currentPlayerId !== myId) {
-      cancelCharge({ silent: true });
-    } else if (!me.alive) {
-      cancelCharge({ silent: true });
-    } else {
-      me.power = clampPower(me.power + chargeDir * CHARGE_RATE * dt);
-      if (me.power >= MAX_POWER) {
-        me.power = MAX_POWER;
-        chargeDir = -1;
-      } else if (me.power <= MIN_POWER) {
-        me.power = MIN_POWER;
-        chargeDir = 1;
-      }
-      renderer.syncPlayers(players);
-    }
   }
 
   // Hard lock only while a shell is actually resolving (or post-shot until next turn)
@@ -1086,10 +1002,8 @@ function updateInput(dt: number): void {
 
   let dirty = false;
   const mobility = me.loadout?.chassis.mobility ?? 1;
-  // Don't drive while holding charge (A/D resume as soon as Space is released / keyup recovered)
-  const canMove = !charging;
 
-  if (canMove && (keys.has("KeyA") || keys.has("ArrowLeft"))) {
+  if (keys.has("KeyA") || keys.has("ArrowLeft")) {
     if (applyLocalMove(me, -1, dt, mobility)) {
       dirty = true;
       if (mode === "playing" && performance.now() - lastMoveSend > 33) {
@@ -1098,7 +1012,7 @@ function updateInput(dt: number): void {
       }
     }
   }
-  if (canMove && (keys.has("KeyD") || keys.has("ArrowRight"))) {
+  if (keys.has("KeyD") || keys.has("ArrowRight")) {
     if (applyLocalMove(me, 1, dt, mobility)) {
       dirty = true;
       if (mode === "playing" && performance.now() - lastMoveSend > 33) {
@@ -1107,7 +1021,7 @@ function updateInput(dt: number): void {
       }
     }
   }
-  // Angle / facing (allowed while charging so you can fine-tune the arc)
+  // Angle
   if (keys.has("KeyW") || keys.has("ArrowUp")) {
     me.angle = clampAngle(me.angle + 45 * dt);
     dirty = true;
@@ -1116,7 +1030,17 @@ function updateInput(dt: number): void {
     me.angle = clampAngle(me.angle - 45 * dt);
     dirty = true;
   }
-  if (keys.has("KeyF") && !charging) {
+  // Power meter (hold Q/E or ,/.)
+  if (keys.has("KeyQ") || keys.has("Comma")) {
+    me.power = clampPower(me.power - POWER_ADJUST_RATE * dt);
+    dirty = true;
+  }
+  if (keys.has("KeyE") || keys.has("Period")) {
+    me.power = clampPower(me.power + POWER_ADJUST_RATE * dt);
+    dirty = true;
+  }
+  // Facing
+  if (keys.has("KeyF")) {
     keys.delete("KeyF");
     me.facing = me.facing === 1 ? -1 : 1;
     dirty = true;
@@ -1293,7 +1217,6 @@ function loop(): void {
         sandbox: mode === "sandbox",
         weaponIndex: sandboxWeaponIndex,
         weaponCount: WEAPON_POOL.length,
-        charging,
         mapName: renderer.getMapName(),
       });
     }
@@ -1305,13 +1228,22 @@ function loop(): void {
   requestAnimationFrame(loop);
 }
 
-// Pass uses pointerdown (not click): HUD innerHTML rebuilds ~10×/s and would
-// destroy the button between mousedown and mouseup, so click never fired.
+// HUD buttons use pointerdown: rebuilds destroy nodes mid-click.
 uiRoot.addEventListener("pointerdown", (e) => {
   const t = e.target as HTMLElement | null;
-  if (t?.closest?.("#btn-pass")) {
+  if (!t?.closest) return;
+  if (t.closest("#btn-pass")) {
     e.preventDefault();
     passTurn();
+  } else if (t.closest("#btn-fire")) {
+    e.preventDefault();
+    fireShot();
+  } else if (t.closest("#btn-power-up")) {
+    e.preventDefault();
+    adjustPower(5);
+  } else if (t.closest("#btn-power-down")) {
+    e.preventDefault();
+    adjustPower(-5);
   }
 });
 

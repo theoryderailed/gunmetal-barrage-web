@@ -31,7 +31,7 @@ export function renderMenu(
       <div class="panel live-panel">
         <h1>GUN METAL BARRAGE</h1>
         <p class="tagline">Procedural artillery · random biomes · questionable life choices</p>
-        <p class="help menu-tip">Hold <kbd>SPACE</kbd> to charge power · release to fire · watch the debris for wind</p>
+        <p class="help menu-tip"><kbd>Q</kbd>/<kbd>E</kbd> power · <kbd>SPACE</kbd> fire · A/D move · W/S angle · watch debris for wind</p>
         <div class="row">
           <label>Callsign</label>
           <input id="name-input" type="text" maxlength="20" value="${escapeHtml(opts.name)}" />
@@ -66,7 +66,7 @@ export function renderMenu(
           <button id="btn-lb" class="secondary">Leaderboard</button>
         </div>
         <p class="help">Sandbox: keys 1–7 pick weapons · [ ] cycle · test each behavior</p>
-        <p class="help">A/D move · W/S angle · hold SPACE charge · release fire · F facing</p>
+        <p class="help">A/D move · W/S angle · Q/E power · SPACE fire · F facing</p>
       </div>
     </div>
   `;
@@ -249,7 +249,6 @@ export function renderHud(
     sandbox?: boolean;
     weaponIndex?: number;
     weaponCount?: number;
-    charging?: boolean;
     mapName?: string;
   },
 ): void {
@@ -268,6 +267,10 @@ export function renderHud(
     : urgent
       ? "timer urgent"
       : "timer";
+  const canAct =
+    (opts.sandbox || isMyTurn) &&
+    opts.phase !== "resolving" &&
+    !!me?.alive;
   const phaseLabel =
     opts.phase === "resolving"
       ? "SHELL IN FLIGHT"
@@ -289,7 +292,7 @@ export function renderHud(
         ${
           opts.sandbox
             ? `<div class="weapon-test">${escapeHtml(w.howToTest ?? "")}</div>
-               <div class="weapon-keys">1–7 select · [ ] cycle · hold SPACE fire</div>`
+               <div class="weapon-keys">1–7 select · [ ] cycle · SPACE fire</div>`
             : me?.loadout?.secondary
               ? `<div class="weapon-secondary">Alt: ${escapeHtml(me.loadout.secondary.name)}</div>`
               : ""
@@ -363,20 +366,19 @@ export function renderHud(
           <div class="bar fuel"><i style="width:${me ? (me.fuel / (me.loadout?.chassis.fuel ?? 1)) * 100 : 0}%"></i></div>
         </div>
         ${weaponCard}
-        <div class="hud-box aim-box ${opts.charging ? "charging" : ""}">
-          <strong>${opts.charging ? "CHARGING" : "AIM"}</strong>
+        <div class="hud-box aim-box">
+          <strong>AIM</strong>
           Angle ${me?.angle.toFixed(0) ?? "—"}° · Facing ${me?.facing === 1 ? "→" : "←"}
           <div class="power-label">POWER ${power.toFixed(0)}</div>
-          <div class="power-bar ${opts.charging ? "live" : ""}">
+          <div class="power-bar live">
             <i style="width:${powerPct}%"></i>
           </div>
-          <div class="muted power-hint">
-            ${
-              opts.charging
-                ? "Release SPACE to fire · Esc cancel"
-                : "Hold SPACE to charge · release to fire"
-            }
+          <div class="power-controls">
+            <button type="button" class="btn-power" id="btn-power-down" ${canAct ? "" : "disabled"} title="Lower power (Q)">−</button>
+            <button type="button" class="btn-fire" id="btn-fire" ${canAct ? "" : "disabled"}>FIRE</button>
+            <button type="button" class="btn-power" id="btn-power-up" ${canAct ? "" : "disabled"} title="Raise power (E)">+</button>
           </div>
+          <div class="muted power-hint">Q/E set power · SPACE or FIRE to shoot</div>
           <span class="muted">A/D move · W/S angle · F flip${
             opts.sandbox ? " · Esc menu" : " · P pass"
           }</span>
@@ -384,8 +386,7 @@ export function renderHud(
       </div>
     </div>
   `;
-  // Pass button: do not bind click here — HUD is rebuilt ~10×/s and that
-  // destroys the node mid-click. main.ts uses pointerdown delegation on #ui-root.
+  // Buttons: pointerdown on #ui-root in main.ts (HUD rebuilds ~10×/s).
 }
 
 function formatBehavior(w: {
