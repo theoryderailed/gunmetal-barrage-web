@@ -1,19 +1,38 @@
 # Gun Metal Barrage
 
-Turn-based 3D artillery (Gunbound / Worms inspired) with **destructible voxel terrain**, **procedural maps & loadouts**, and **online public/private lobbies**.
+Turn-based **2.5D voxel artillery** (Gunbound / Worms inspired) with destructible terrain, procedural maps & loadouts, online lobbies, and bot pilots.
+
+![Gun Metal Barrage — main menu over a live battlefield](docs/menu-screenshot.png)
 
 ## Play
 
 **Live:** [https://gunmetal-barrageserver-production.up.railway.app/](https://gunmetal-barrageserver-production.up.railway.app/)
+
+The production build serves the **client and Colyseus server on the same origin** (`https` / `wss`). Menu and lobby run a live ambient battle in the background while you queue up.
+
+## Features
+
+- **2.5D side arena** — side-view camera, tanks drive on X, full-depth terrain digs so columns stay consistent
+- **Destructible voxels** — large craters; **Bunker Buster** digs deep shafts + undercuts to collapse cover
+- **Procedural maps** — biomes (meadow, desert, canyon, volcanic, arctic, ruins), gulfs, ridges, mesas, bridges
+- **Scattered spawns** — shuffled pads across the map (not fixed left/right lanes)
+- **Turn-based combat** — move → set power → fire; wind; turn timer; full fuel each turn
+- **Power meter fire** — Q/E (or HUD ±) sets power; **Space** / **FIRE** shoots once (no hold-to-charge)
+- **Short aim guide** — only the early arc is shown (no free impact reticle)
+- **Budget loadouts** — procedural tanks/weapons under a point cap; weapon catalog testable in Sandbox
+- **Lobbies** — public rooms, private join codes, unique bot pilots, ready meter
+- **Leaderboard** — post-match rankings in SQLite
+- **Sandbox** — keys 1–7 to try every weapon behavior (single, lob, cluster, drill, bounce, triple, nuke)
 
 ## Stack
 
 | Layer | Tech |
 |-------|------|
 | Client | Vite, TypeScript, Three.js |
-| Server | Node.js, Colyseus |
+| Server | Node.js, Colyseus, Express |
 | Shared | Types, proc-gen, ballistics, game rules |
 | Physics | Analytic ballistics + voxel collision |
+| Deploy | Railway (Nixpacks) — monorepo single service |
 
 ## Monorepo
 
@@ -33,14 +52,14 @@ npm run dev:server   # terminal 1 — http://localhost:2567
 npm run dev:client   # terminal 2 — http://localhost:5173
 ```
 
-## Game design (MVP)
+For a single-process production build (same as Railway):
 
-- **2.5D side arena** — side-view camera, tanks move on X, hold-to-charge fire
-- **Voxel terrain** — chunked grid, explosion stamps, greedy mesh
-- **Turn-based** — move → aim → fire; wind; timers; full fuel each turn
-- **Budget loadouts** — procedural tanks/weapons under a point cap
-- **Lobbies** — public list + private join codes; unique bot pilots
-- **Leaderboard** — post-match rankings persisted to SQLite
+```bash
+npm install
+npm run build
+npm start
+# open http://localhost:2567
+```
 
 ## Controls
 
@@ -48,11 +67,13 @@ npm run dev:client   # terminal 2 — http://localhost:5173
 |-------|--------|
 | A / D | Move |
 | W / S | Aim angle |
-| Q / E | Lower / raise power |
-| Space | Fire (current power) |
+| Q / E (or , / .) | Lower / raise power |
+| Space or FIRE | Fire at current power |
 | F | Flip facing |
 | P | Pass turn |
 | 1–7 | Sandbox weapon select |
+| [ ] | Sandbox cycle weapons |
+| Esc | Sandbox → menu |
 
 ## Scripts
 
@@ -62,53 +83,43 @@ npm run dev:client   # terminal 2 — http://localhost:5173
 | `npm run dev:server` | Colyseus with hot reload |
 | `npm run build:shared` | Compile shared package |
 | `npm run build` | Build shared + server + client |
-| `npm start` | Production server (serves client + Colyseus) |
+| `npm start` | Production server (static client + Colyseus) |
 | `npm run typecheck` | Typecheck all workspaces |
 
 ## Deploy (Railway)
 
 **Production:** [https://gunmetal-barrageserver-production.up.railway.app/](https://gunmetal-barrageserver-production.up.railway.app/)
 
-One Railway service runs **Colyseus + Express + the built client** on the same origin (`https` / `wss`). That avoids CORS and mixed-content issues.
+One Railway service runs **Colyseus + Express + the built Vite client** on the same host.
 
 ### Steps
 
 1. Push this repo to GitHub.
-2. [Railway](https://railway.app) → **New Project** → **Deploy from GitHub** → select the repo.
-3. Use **one service** for the whole app (not separate client + server services).
-4. Leave **Root Directory** empty (monorepo root). If Railway auto-created `@gunmetal-barrage/client` and `@gunmetal-barrage/server` services, delete/disable the extras and keep a single service pointed at the repo root.
-5. Railway reads `railway.toml`:
-   - **Install:** Nixpacks `npm ci` (includes devDependencies for the build)
-   - **Build:** `npm run build`
+2. [Railway](https://railway.app) → **New Project** → **Deploy from GitHub**.
+3. Use **one service** at the **monorepo root** (empty Root Directory).
+4. Config comes from `railway.toml` / `nixpacks.toml`:
+   - **Install:** `npm ci` (devDependencies kept for the build)
+   - **Build:** `npm run build` only — do **not** re-run `npm ci` in the build step
    - **Start:** `npm start`
    - **Healthcheck:** `GET /health`
-6. Deploy. Open the public URL — the game UI and WebSocket share the same host.
+5. Open the public URL.
 
-**Do not** set Root Directory to `packages/client` or `packages/server` — workspace packages need the monorepo root install.
+**Do not** set Root Directory to `packages/client` or `packages/server`.
 
 ### Environment
 
 | Variable | Required | Notes |
 |----------|----------|--------|
-| `PORT` | Auto | Railway injects this; server already uses `process.env.PORT` |
-| `NODE_ENV` | Optional | Set `production` if not set by the platform |
-| `VITE_SERVER_URL` | No | Only if you split client/server later. Leave **unset** so the client uses same-origin `wss://` |
+| `PORT` | Auto | Railway injects this |
+| `NODE_ENV` | Optional | Platform often sets `production` |
+| `VITE_SERVER_URL` | No | Leave unset for same-origin `wss://` |
 
-Copy `.env.example` for local reference. Do not bake secrets into the Vite client.
-
-### Local production smoke test
-
-```bash
-npm install
-npm run build
-npm start
-# open http://localhost:2567
-```
+See `.env.example`. Do not bake secrets into the Vite client.
 
 ### Notes
 
-- **SQLite** (`better-sqlite3`) lives on the container filesystem. Ephemeral disks lose leaderboard data on redeploy/restart unless you attach a Railway volume to the data path.
-- Shared hosting (e.g. Hostinger shared) will not run the game server; a **VPS** can if you install Node 20+ and reverse-proxy WebSockets.
+- **SQLite** (`better-sqlite3`) is on the container disk — leaderboard data is ephemeral unless you attach a volume.
+- Shared hosting without a long-running Node process will not run multiplayer; a VPS with Node 20+ works if you reverse-proxy WebSockets.
 
 ## License
 
