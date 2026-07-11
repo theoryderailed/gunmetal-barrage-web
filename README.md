@@ -72,7 +72,8 @@ One Railway service runs **Colyseus + Express + the built client** on the same o
 3. Use **one service** for the whole app (not separate client + server services).
 4. Leave **Root Directory** empty (monorepo root). If Railway auto-created `@gunmetal-barrage/client` and `@gunmetal-barrage/server` services, delete/disable the extras and keep a single service pointed at the repo root.
 5. Railway reads `railway.toml`:
-   - **Build:** `npm ci && npm run build`
+   - **Install:** Nixpacks `npm ci` (includes devDependencies for the build)
+   - **Build:** `npm run build`
    - **Start:** `npm start`
    - **Healthcheck:** `GET /health`
 6. Deploy. Open the public URL — the game UI and WebSocket share the same host.

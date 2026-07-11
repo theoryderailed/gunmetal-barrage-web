@@ -1,4 +1,8 @@
-# Native compile support for better-sqlite3 on Railway/Nixpacks.
-# Install/build/start are driven by railway.toml + package.json.
+# better-sqlite3 needs a toolchain when no prebuild matches the image.
+# Keep install/devDeps available so tsc/vite work during build (NODE_ENV=production).
+[variables]
+NPM_CONFIG_PRODUCTION = "false"
+NIXPACKS_NODE_VERSION = "20"
+
 [phases.setup]
 nixPkgs = ["nodejs_20", "python3", "gcc"]

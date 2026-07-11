@@ -3,7 +3,9 @@
 
 [build]
 builder = "NIXPACKS"
-buildCommand = "npm ci && npm run build"
+# Nixpacks already runs `npm ci` in the install layer. Re-running it here
+# fails with EBUSY on /app/node_modules/.cache in Railway's Docker builder.
+buildCommand = "npm run build"
 
 [deploy]
 startCommand = "npm start"
