@@ -192,11 +192,8 @@ export function renderLobby(
                       const selected = i === opts.selectedLoadoutIndex;
                       const alt = lo.secondary
                         ? escapeHtml(lo.secondary.name)
-                        : "—";
-                      const ammo =
-                        lo.primary.id === "peashooter"
-                          ? "∞"
-                          : String(lo.primary.maxAmmo);
+                        : "Mini Nuke";
+                      const ammo = String(lo.primary.maxAmmo);
                       return `
               <button type="button" class="char-card ${selected ? "selected" : ""}" data-loadout="${i}">
                 <div class="char-card-top">
@@ -217,13 +214,13 @@ export function renderLobby(
                   <span class="char-wpn-sum">${escapeHtml(lo.primary.summary)}</span>
                 </div>
                 <div class="char-weapon alt">
-                  <span class="char-wpn-label">ALT · R</span>
+                  <span class="char-wpn-label">ALT · R · ×1</span>
                   <span class="char-wpn-name">${alt}</span>
                   ${
                     lo.secondary
-                      ? `<span class="char-wpn-meta">DMG ${lo.secondary.damage} · BLAST ${lo.secondary.blastRadius} · AMMO ${lo.secondary.maxAmmo}</span>
+                      ? `<span class="char-wpn-meta">DMG ${lo.secondary.damage} · BLAST ${lo.secondary.blastRadius} · ONCE</span>
                          <span class="char-wpn-sum">${escapeHtml(lo.secondary.summary)}</span>`
-                      : `<span class="char-wpn-meta muted">No alternate weapon</span>`
+                      : `<span class="char-wpn-meta">Once per match · huge lob blast</span>`
                   }
                 </div>
               </button>`;
@@ -409,170 +406,182 @@ export function renderHud(
     !spectating;
   const phaseLabel =
     opts.phase === "resolving"
-      ? "SHELL IN FLIGHT"
+      ? "FIRING"
       : opts.phase === "aim"
         ? "AIM"
         : opts.phase === "move"
-          ? "MOVE / AIM"
+          ? "MOVE"
           : opts.phase.toUpperCase();
 
   const w = me?.loadout?.primary;
   const alt = me?.loadout?.secondary;
   const altAmmo = me?.secondaryAmmo ?? 0;
-  const weaponCard = w
-    ? `
-      <div class="hud-box weapon-card">
-        <strong>WEAPON${opts.sandbox ? ` [${(opts.weaponIndex ?? 0) + 1}/${opts.weaponCount ?? 1}]` : ""}</strong>
-        <div class="weapon-name">${escapeHtml(w.name)}</div>
-        <div class="weapon-stats">DMG ${w.damage} · BLAST ${w.blastRadius} · SHELLS ${w.projectileCount} · AMMO ${
-          w.id === "peashooter" || (me?.primaryAmmo ?? 0) >= 99
-            ? "∞"
-            : `${me?.primaryAmmo ?? "—"}/${w.maxAmmo}`
-        }</div>
-        <div class="weapon-behavior">${escapeHtml(formatBehavior(w))}</div>
-        <div class="weapon-summary">${escapeHtml(w.summary ?? "")}</div>
-        ${
-          opts.sandbox
-            ? `<div class="weapon-test">${escapeHtml(w.howToTest ?? "")}</div>
-               <div class="weapon-keys">1–8 select · [ ] cycle · SPACE fire · R alt</div>`
-            : alt
-              ? `<div class="weapon-secondary ${altAmmo <= 0 ? "spent" : ""}">
-                   <span class="weapon-secondary-label">ALT · R</span>
-                   <span class="weapon-secondary-name">${escapeHtml(alt.name)}</span>
-                   <span class="weapon-secondary-ammo">${altAmmo}/${alt.maxAmmo}</span>
-                   ${altAmmo > 0 ? `<button type="button" class="btn-alt-fire" id="btn-fire-alt">FIRE ALT</button>` : `<span class="weapon-secondary-gone">SPENT</span>`}
-                 </div>`
-              : ""
-        }
-      </div>`
-    : "";
+  // Ammo only when finite — skip ∞ noise in the dock
+  const primaryAmmo =
+    w && w.id !== "peashooter" && (me?.primaryAmmo ?? 0) < 99
+      ? `${me?.primaryAmmo ?? "—"}/${w.maxAmmo}`
+      : null;
+  const hpPct = me
+    ? (me.hp / (me.loadout?.chassis.maxHp ?? 1)) * 100
+    : 0;
+  const fuelPct = me
+    ? (me.fuel / (me.loadout?.chassis.fuel ?? 1)) * 100
+    : 0;
+  const hpVal = me ? Math.max(0, Math.ceil(me.hp)) : "—";
 
   const turnTitle = opts.sandbox
     ? "SANDBOX"
     : isMyTurn
       ? "YOUR TURN"
       : `${escapeHtml(current?.name ?? "…")}'S TURN`;
+  const showPass = isMyTurn && !opts.sandbox && !spectating;
+  const dockTone = isMyTurn ? " dock-mine" : "";
+  const gunTitle = w
+    ? `${w.name}${w.summary ? ` — ${w.summary}` : ""}`
+    : "";
+
+  // Compact dock: no DMG/BLAST (known at kit select). Weapon once: name + ammo.
+  // Players panel is name/HP only (no gun list).
+  const dock = spectating
+    ? `
+    <div class="dock ${timerClass}">
+      <div class="dock-main">
+        <div class="dock-turn">
+          <span class="dock-turn-who">${turnTitle}</span>
+          <span class="dock-turn-meta">
+            <span class="dock-phase">${phaseLabel}</span>
+            <span class="dock-clock">${Math.ceil(tLeft)}s</span>
+          </span>
+          <div class="dock-clock-bar"><i style="width:${tPct}%"></i></div>
+        </div>
+        <div class="dock-spectate">
+          <span class="dock-spectate-label">SPECTATING</span>
+          <div class="dock-spectate-actions">
+            <button type="button" class="dock-btn dock-btn-good" id="btn-spectate-stay">Watch</button>
+            <button type="button" class="dock-btn dock-btn-ghost" id="btn-spectate-leave">Leave</button>
+          </div>
+        </div>
+      </div>
+    </div>`
+    : `
+    <div class="dock ${timerClass}${dockTone}">
+      <div class="dock-main">
+        <div class="dock-turn">
+          <span class="dock-turn-who">${turnTitle}</span>
+          <span class="dock-turn-meta">
+            <span class="dock-phase">${phaseLabel}</span>
+            <span class="dock-clock">${Math.ceil(tLeft)}s</span>
+          </span>
+          <div class="dock-clock-bar"><i style="width:${tPct}%"></i></div>
+        </div>
+
+        <div class="dock-vitals" title="${escapeHtml(me?.loadout?.name ?? "Tank")}">
+          <div class="dock-meter">
+            <span class="dock-meter-lbl">HP</span>
+            <div class="dock-meter-track"><i style="width:${hpPct}%"></i></div>
+            <span class="dock-meter-val">${hpVal}</span>
+          </div>
+          <div class="dock-meter">
+            <span class="dock-meter-lbl">FUEL</span>
+            <div class="dock-meter-track fuel"><i style="width:${fuelPct}%"></i></div>
+          </div>
+        </div>
+
+        <div class="dock-gun" title="${escapeHtml(gunTitle)}">
+          <span class="dock-gun-name">${
+            w ? escapeHtml(w.name) : "—"
+          }${
+            opts.sandbox
+              ? ` <span class="dock-gun-idx">${(opts.weaponIndex ?? 0) + 1}/${opts.weaponCount ?? 1}</span>`
+              : ""
+          }</span>
+          ${primaryAmmo ? `<span class="dock-gun-ammo">${primaryAmmo}</span>` : ""}
+          ${
+            !opts.sandbox && alt
+              ? altAmmo > 0
+                ? `<button type="button" class="dock-btn dock-btn-alt" id="btn-fire-alt" title="${escapeHtml(alt.name)} · ${altAmmo}/${alt.maxAmmo}">R ${escapeHtml(alt.name)}</button>`
+                : `<span class="dock-gun-spent" title="${escapeHtml(alt.name)}">R —</span>`
+              : ""
+          }
+        </div>
+
+        <div class="dock-aim-readout">
+          <span class="dock-angle">${me?.angle.toFixed(0) ?? "—"}°</span>
+          <span class="dock-facing">${me?.facing === 1 ? "→" : "←"}</span>
+        </div>
+
+        <div class="dock-power">
+          <span class="dock-power-val">${power.toFixed(0)}</span>
+          <div class="dock-power-track"><i style="width:${powerPct}%"></i></div>
+        </div>
+
+        <div class="dock-fire-group">
+          <button type="button" class="dock-btn dock-btn-pwr" id="btn-power-down" ${canAct ? "" : "disabled"} title="Lower power (Q)">−</button>
+          <button type="button" class="dock-btn dock-btn-fire" id="btn-fire" ${canAct ? "" : "disabled"}>FIRE</button>
+          <button type="button" class="dock-btn dock-btn-pwr" id="btn-power-up" ${canAct ? "" : "disabled"} title="Raise power (E)">+</button>
+        </div>
+
+        ${
+          opts.sandbox
+            ? `<div class="dock-util">
+                 <button type="button" class="dock-btn dock-btn-respawn" id="btn-sandbox-respawn" title="Respawn tanks at pads">RESPAWN</button>
+               </div>`
+            : showPass
+              ? `<div class="dock-util">
+                   <button type="button" class="dock-btn dock-btn-pass" id="btn-pass">PASS</button>
+                 </div>`
+              : ""
+        }
+      </div>
+    </div>`;
+
+  const windMag = Math.min(100, (Math.abs(opts.wind) / 1.8) * 100);
+  const windMeterStyle = `width:${windMag}%;margin-left:${
+    opts.wind >= 0 ? "50%" : "auto"
+  };margin-right:${opts.wind < 0 ? "50%" : "auto"};transform:${
+    opts.wind < 0 ? "scaleX(-1) translateX(100%)" : "none"
+  }`;
 
   root.innerHTML = `
     <div class="hud">
       <div class="crt-overlay"></div>
       <div class="hud-top">
         <div class="hud-box wind-box">
-          <strong>WIND</strong>
-          <div class="wind-visual">
+          <div class="wind-row">
+            <strong>WIND</strong>
             <span class="wind-dir">${windArrow(opts.wind)}</span>
             <div class="wind-meter">
-              <i style="width:${Math.min(100, Math.abs(opts.wind) / 1.8 * 100)}%;margin-left:${opts.wind >= 0 ? "50%" : "auto"};margin-right:${opts.wind < 0 ? "50%" : "auto"};transform:${opts.wind < 0 ? "scaleX(-1) translateX(100%)" : "none"}"></i>
+              <i style="${windMeterStyle}"></i>
             </div>
             <span class="wind-val">${opts.wind >= 0 ? "+" : ""}${opts.wind.toFixed(2)}</span>
           </div>
-          <div class="muted wind-hint">Debris drifts with the wind</div>
-          ${opts.mapName ? `<div class="map-chip">${escapeHtml(opts.mapName)}</div>` : ""}
-        </div>
-        <div class="hud-box ${timerClass}">
-          <strong>${turnTitle}</strong>
-          <div class="phase-label">${phaseLabel}</div>
-          <div class="timer-row">
-            <span class="timer-num">${Math.ceil(tLeft)}s</span>
-            <div class="timer-bar"><i style="width:${tPct}%"></i></div>
-          </div>
-          ${
-            isMyTurn && !opts.sandbox && !spectating
-              ? `<button type="button" class="btn-pass" id="btn-pass">Pass (P)</button>`
-              : ""
-          }
         </div>
         <div class="hud-box player-list">
-          <strong>TANKS</strong>
+          <div class="player-list-head">
+            <strong>PLAYERS</strong>
+            ${opts.mapName ? `<span class="map-chip">${escapeHtml(opts.mapName)}</span>` : ""}
+          </div>
           ${opts.players
             .map((p) => {
               const cls = [
+                "player-row",
                 p.id === opts.meId ? "me" : "",
                 !p.alive ? "dead" : "",
                 p.id === opts.currentId ? "turn" : "",
               ]
                 .filter(Boolean)
                 .join(" ");
-              const wpn = p.loadout?.primary.name ?? "";
-              const persona = p.identity
-                ? personaLabel(p.identity.persona)
-                : p.isBot
-                  ? "Bot"
-                  : "";
-              return `<div class="${cls}">${escapeHtml(p.name)} ${Math.max(0, Math.ceil(p.hp))}hp <span class="muted">${escapeHtml(wpn)}${persona ? ` · ${escapeHtml(persona)}` : ""}</span></div>`;
+              return `<div class="${cls}"><span class="player-name">${escapeHtml(p.name)}</span><span class="player-hp">${Math.max(0, Math.ceil(p.hp))}</span></div>`;
             })
             .join("")}
         </div>
       </div>
       <div class="hud-bottom">
-        ${
-          spectating
-            ? `<div class="hud-box spectate-box">
-                <strong>SPECTATING</strong>
-                <p class="spectate-copy">You're out — watch the rest of the match or leave.</p>
-                <div class="spectate-actions">
-                  <button type="button" class="btn-wide good" id="btn-spectate-stay">Keep watching</button>
-                  <button type="button" class="secondary" id="btn-spectate-leave">Leave match</button>
-                </div>
-              </div>`
-            : `
-        <div class="hud-box">
-          <strong>${escapeHtml(me?.loadout?.name ?? "Tank")}</strong>
-          HP
-          <div class="bar"><i style="width:${me ? (me.hp / (me.loadout?.chassis.maxHp ?? 1)) * 100 : 0}%"></i></div>
-          Fuel
-          <div class="bar fuel"><i style="width:${me ? (me.fuel / (me.loadout?.chassis.fuel ?? 1)) * 100 : 0}%"></i></div>
-        </div>
-        ${weaponCard}
-        <div class="hud-box aim-box">
-          <strong>AIM</strong>
-          Angle ${me?.angle.toFixed(0) ?? "—"}° · Facing ${me?.facing === 1 ? "→" : "←"}
-          <div class="power-label">POWER ${power.toFixed(0)}</div>
-          <div class="power-bar live">
-            <i style="width:${powerPct}%"></i>
-          </div>
-          <div class="power-controls">
-            <button type="button" class="btn-power" id="btn-power-down" ${canAct ? "" : "disabled"} title="Lower power (Q)">−</button>
-            <button type="button" class="btn-fire" id="btn-fire" ${canAct ? "" : "disabled"}>FIRE</button>
-            <button type="button" class="btn-power" id="btn-power-up" ${canAct ? "" : "disabled"} title="Raise power (E)">+</button>
-          </div>
-          <div class="muted power-hint">Q/E set power · SPACE or FIRE to shoot</div>
-          <span class="muted">A/D move · W/S angle · F flip${
-            opts.sandbox ? " · Esc menu" : " · P pass"
-          }</span>
-        </div>`
-        }
+        ${dock}
       </div>
     </div>
   `;
   // Buttons: pointerdown on #ui-root in main.ts (HUD rebuilds ~10×/s).
-}
-
-function formatBehavior(w: {
-  behavior?: string;
-  trajectory: string;
-  projectileCount: number;
-}): string {
-  switch (w.behavior) {
-    case "single":
-      return "BEHAVIOR: 1 shell → 1 blast";
-    case "lob":
-      return "BEHAVIOR: high lob → 1 blast";
-    case "drill":
-      return "BEHAVIOR: low-G drill → deep shaft + undercut";
-    case "homing":
-      return "BEHAVIOR: rocket steers toward nearest enemy";
-    case "special":
-      return "BEHAVIOR: ALT special · usually 1 shot";
-    case "bounce":
-      return "BEHAVIOR: bounce ×2 → blast";
-    case "cluster":
-      return "BEHAVIOR: 1 flight → multi-blast at impact";
-    case "triple":
-      return "BEHAVIOR: 3 tight shells → 3 blasts";
-    default:
-      return `BEHAVIOR: ${w.trajectory} ×${w.projectileCount}`;
-  }
 }
 
 export function renderResults(

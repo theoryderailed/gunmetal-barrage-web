@@ -476,8 +476,9 @@ button:disabled {
 .hud-top {
   display: flex;
   justify-content: space-between;
-  padding: 12px 16px;
-  gap: 12px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  gap: 10px;
   flex-wrap: wrap;
 }
 
@@ -503,48 +504,535 @@ button:disabled {
   left: 0;
   right: 0;
   bottom: 0;
-  padding: 12px 16px 18px;
+  padding: 10px 12px 14px;
   display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  align-items: flex-end;
-  flex-wrap: wrap;
-}
-
-.bar {
-  height: 12px;
-  background: #222;
-  border: 2px solid #000;
-  width: 140px;
-  margin-top: 4px;
-}
-
-.bar > i {
-  display: block;
-  height: 100%;
-  background: linear-gradient(90deg, var(--bad), var(--accent), var(--good));
-}
-
-.bar.fuel > i {
-  background: var(--accent-2);
+  justify-content: center;
+  pointer-events: none;
 }
 
 .player-list {
-  min-width: 180px;
+  min-width: 120px;
+  max-width: 200px;
+  font-size: 14px;
+  padding: 6px 8px !important;
 }
 
-.player-list .me {
+.player-list-head {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+  margin-bottom: 4px;
+}
+
+.player-list-head strong {
+  margin-bottom: 0;
+  font-size: 9px;
+}
+
+.player-list .map-chip {
+  margin-top: 0;
+  max-width: 100%;
+  text-align: right;
+}
+
+.player-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  line-height: 1.35;
+  padding: 1px 0;
+}
+
+.player-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.player-hp {
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  flex-shrink: 0;
+}
+
+.player-list .me .player-name,
+.player-list .me .player-hp {
   color: var(--good);
 }
 
 .player-list .dead {
   color: var(--muted);
+  opacity: 0.65;
+}
+
+.player-list .dead .player-name {
   text-decoration: line-through;
 }
 
 .player-list .turn {
   outline: 1px solid var(--accent);
-  padding: 0 4px;
+  outline-offset: 1px;
+  padding: 1px 3px;
+  border-radius: 1px;
+}
+
+/* ── Single-row combat dock ───────────────────────────────────
+   turn | HP/fuel | gun | aim | power | fire | pass
+   Sections separated by borders; dock hugs content (no empty right gap).
+*/
+.dock {
+  pointer-events: auto;
+  display: inline-flex;
+  flex-direction: column;
+  max-width: 100%;
+  background: rgba(10, 12, 18, 0.9);
+  border: 2px solid var(--panel-border);
+  box-shadow: var(--shadow), 0 -8px 24px rgba(0, 0, 0, 0.35);
+  font-size: 14px;
+  overflow: hidden; /* keep section buttons inside the panel chrome */
+}
+
+.dock.dock-mine {
+  border-color: rgba(109, 255, 138, 0.45);
+}
+
+.dock.urgent {
+  border-color: rgba(255, 204, 51, 0.55);
+}
+
+.dock.critical {
+  border-color: var(--bad);
+  animation: pulse-border 0.5s ease-in-out infinite alternate;
+}
+
+.dock-main {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: stretch;
+  gap: 0;
+  padding: 0;
+  min-width: 0;
+}
+
+/* Section shells + vertical borders between them */
+.dock-main > .dock-turn,
+.dock-main > .dock-vitals,
+.dock-main > .dock-gun,
+.dock-main > .dock-aim-readout,
+.dock-main > .dock-power,
+.dock-main > .dock-fire-group,
+.dock-main > .dock-util,
+.dock-main > .dock-spectate {
+  padding: 8px 10px;
+  box-sizing: border-box;
+}
+
+.dock-main > .dock-vitals,
+.dock-main > .dock-gun,
+.dock-main > .dock-aim-readout,
+.dock-main > .dock-power,
+.dock-main > .dock-fire-group,
+.dock-main > .dock-util,
+.dock-main > .dock-spectate {
+  border-left: 1px solid #2a3348;
+}
+
+/* PASS / RESPAWN live in a padded section so they stay inside the dock edge */
+.dock-util {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  align-self: stretch;
+  justify-content: center;
+}
+
+/* Turn / clock */
+.dock-turn {
+  flex: 0 0 auto;
+  width: 118px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+}
+
+.dock-turn-who {
+  font-family: "Press Start 2P", monospace;
+  font-size: 8px;
+  color: var(--accent-2);
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dock.dock-mine .dock-turn-who {
+  color: var(--good);
+}
+
+.dock-turn-meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.dock-phase {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.dock-clock {
+  font-family: "Press Start 2P", monospace;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.dock.urgent .dock-clock {
+  color: #ffcc33;
+}
+
+.dock.critical .dock-clock {
+  color: var(--bad);
+}
+
+.dock-clock-bar {
+  height: 4px;
+  background: #1a1a1a;
+  border: 1px solid #000;
+  overflow: hidden;
+}
+
+.dock-clock-bar > i {
+  display: block;
+  height: 100%;
+  background: var(--good);
+  transition: width 0.15s linear;
+}
+
+.dock.urgent .dock-clock-bar > i {
+  background: #ffcc33;
+}
+
+.dock.critical .dock-clock-bar > i {
+  background: var(--bad);
+}
+
+/* Vitals — bars only */
+.dock-vitals {
+  flex: 0 0 auto;
+  width: 118px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+}
+
+.dock-meter {
+  display: grid;
+  grid-template-columns: 2.4em 1fr auto;
+  align-items: center;
+  gap: 5px;
+}
+
+.dock-meter-lbl {
+  font-family: "Press Start 2P", monospace;
+  font-size: 6px;
+  color: var(--muted);
+}
+
+.dock-meter-track {
+  height: 7px;
+  background: #161616;
+  border: 1px solid #000;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.dock-meter-track > i {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, var(--bad), var(--accent), var(--good));
+}
+
+.dock-meter-track.fuel > i {
+  background: var(--accent-2);
+}
+
+.dock-meter-val {
+  font-family: "Press Start 2P", monospace;
+  font-size: 7px;
+  min-width: 1.6em;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Weapon — name (+ ammo if limited) + alt chip only */
+.dock-gun {
+  flex: 0 1 auto;
+  max-width: 200px;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  align-self: stretch;
+  gap: 6px;
+  min-width: 0;
+}
+
+.dock-gun-name {
+  font-family: "Press Start 2P", monospace;
+  font-size: 8px;
+  color: var(--accent);
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.dock-gun-idx {
+  font-size: 7px;
+  color: var(--muted);
+}
+
+.dock-gun-ammo {
+  font-family: "Press Start 2P", monospace;
+  font-size: 7px;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.dock-gun-spent {
+  font-family: "Press Start 2P", monospace;
+  font-size: 7px;
+  color: var(--muted);
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
+/* Aim / power / fire */
+.dock-aim-readout {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  align-self: stretch;
+  gap: 8px;
+  min-width: 3.6em;
+}
+
+.dock-angle {
+  font-family: "Press Start 2P", monospace;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+}
+
+.dock-facing {
+  font-size: 14px;
+  color: var(--accent-2);
+  font-weight: bold;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  /* Optical center vs pixel font angle text */
+  transform: translateY(-0.5px);
+}
+
+.dock-power {
+  flex: 0 0 auto;
+  width: 108px;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  align-self: stretch;
+  gap: 6px;
+}
+
+.dock-power-val {
+  font-family: "Press Start 2P", monospace;
+  font-size: 9px;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+  min-width: 1.6em;
+  flex-shrink: 0;
+}
+
+.dock-power-track {
+  flex: 1 1 auto;
+  height: 10px;
+  background: #121212;
+  border: 2px solid #000;
+  box-shadow: inset 1px 1px 0 #000;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.dock-power-track > i {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, #3d8bfd, #6dff8a 55%, #ffcc33 80%, #ff4d6d);
+  box-shadow: 0 0 6px rgba(255, 200, 50, 0.45);
+  transition: width 0.05s linear;
+}
+
+.dock-fire-group {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  align-self: stretch;
+  gap: 4px;
+}
+
+/* Shared dock buttons */
+.dock-btn {
+  font-family: "Press Start 2P", monospace;
+  border: 2px solid #000;
+  box-shadow: 2px 2px 0 #000;
+  cursor: pointer;
+  color: var(--text);
+  background: #2a3548;
+  line-height: 1;
+}
+
+.dock-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.dock-btn-pwr {
+  min-width: 28px;
+  padding: 7px 5px;
+  font-size: 11px;
+}
+
+.dock-btn-pwr:hover:not(:disabled) {
+  background: var(--accent-2);
+  color: #0a1020;
+}
+
+.dock-btn-fire {
+  padding: 7px 10px;
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  background: var(--accent);
+  color: #120800;
+}
+
+.dock-btn-fire:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
+.dock-btn-alt {
+  flex-shrink: 0;
+  max-width: 7.5em;
+  padding: 5px 6px;
+  font-size: 6px;
+  background: #ff2200;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dock-btn-alt:hover {
+  filter: brightness(1.08);
+}
+
+.dock-util .dock-btn-pass,
+.dock-util .dock-btn-respawn {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 7px 8px;
+  font-size: 7px;
+  background: #2a3548;
+  /* Keep drop-shadow inside section padding */
+  box-shadow: 2px 2px 0 #000;
+}
+
+.dock-util .dock-btn-pass:hover,
+.dock-util .dock-btn-respawn:hover {
+  background: var(--accent);
+  color: #120800;
+}
+
+.dock-util .dock-btn-respawn {
+  background: #2a4850;
+  color: var(--accent-2);
+}
+
+.dock-btn-good {
+  padding: 8px 12px;
+  font-size: 8px;
+  background: var(--good);
+  color: #0a1208;
+}
+
+.dock-btn-ghost {
+  padding: 8px 12px;
+  font-size: 8px;
+  background: #2a3548;
+}
+
+.dock-spectate {
+  flex: 0 1 auto;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.dock-spectate-label {
+  font-family: "Press Start 2P", monospace;
+  font-size: 9px;
+  color: var(--bad);
+}
+
+.dock-spectate-actions {
+  display: flex;
+  gap: 8px;
+}
+
+@media (max-width: 780px) {
+  .dock {
+    display: flex;
+    width: 100%;
+  }
+
+  .dock-main {
+    flex-wrap: wrap;
+  }
+
+  .dock-main > .dock-vitals,
+  .dock-main > .dock-gun,
+  .dock-main > .dock-aim-readout,
+  .dock-main > .dock-power,
+  .dock-main > .dock-fire-group,
+  .dock-main > .dock-util,
+  .dock-main > .dock-spectate {
+    border-left: none;
+  }
+
+  .dock-turn,
+  .dock-vitals {
+    width: auto;
+    min-width: 100px;
+  }
+
+  .dock-power {
+    width: 120px;
+  }
 }
 
 /* Rare match toasts (e.g. eliminated) — turn banner is the main callout */
@@ -711,11 +1199,6 @@ button:disabled {
   margin-top: 8px;
 }
 
-.weapon-card {
-  min-width: 260px;
-  max-width: 340px;
-}
-
 .weapon-name {
   font-family: "Press Start 2P", monospace;
   font-size: 11px;
@@ -810,29 +1293,43 @@ button:disabled {
   }
 }
 
+.timer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+
+.timer-head strong {
+  margin-bottom: 0;
+}
+
 .timer .phase-label {
-  font-size: 15px;
+  font-size: 12px;
   color: var(--muted);
-  margin: 2px 0 4px;
+  margin: 0;
+  white-space: nowrap;
+  min-width: 3.2em;
 }
 
 .timer-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 
 .timer-num {
-  font-size: 22px;
-  min-width: 2.2em;
+  font-size: 16px;
+  min-width: 1.8em;
 }
 
 .timer-bar {
   flex: 1;
-  height: 10px;
+  height: 8px;
   background: #222;
   border: 2px solid #000;
-  min-width: 80px;
+  min-width: 64px;
 }
 
 .timer-bar > i {
@@ -873,16 +1370,17 @@ button:disabled {
 }
 
 .btn-pass {
-  margin-top: 8px;
+  margin: 0;
   font-family: "Press Start 2P", monospace;
-  font-size: 8px;
-  padding: 8px 10px;
+  font-size: 7px;
+  padding: 5px 8px;
   background: #2a3548;
   color: var(--text);
   border: 2px solid #000;
   box-shadow: 2px 2px 0 #000;
   cursor: pointer;
-  width: 100%;
+  width: auto;
+  flex-shrink: 0;
 }
 
 .btn-pass:hover {
@@ -891,7 +1389,8 @@ button:disabled {
 }
 
 .hud-box.timer {
-  min-width: 180px;
+  min-width: 150px;
+  padding: 6px 10px;
 }
 
 .power-label {
@@ -1477,24 +1976,6 @@ button:disabled {
   line-height: 1.35;
 }
 
-.weapon-secondary {
-  margin-top: 8px;
-  padding: 8px;
-  border: 2px solid rgba(255, 17, 0, 0.45);
-  background: rgba(255, 17, 0, 0.08);
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px 10px;
-  font-size: 16px;
-}
-
-.weapon-secondary.spent {
-  border-color: #3d4a66;
-  background: rgba(0, 0, 0, 0.25);
-  opacity: 0.75;
-}
-
 .weapon-secondary-label {
   font-family: "Press Start 2P", monospace;
   font-size: 7px;
@@ -1510,14 +1991,12 @@ button:disabled {
   font-family: "Press Start 2P", monospace;
   font-size: 8px;
   color: var(--accent-2);
-  margin-left: auto;
 }
 
 .weapon-secondary-gone {
   font-family: "Press Start 2P", monospace;
   font-size: 7px;
   color: var(--muted);
-  margin-left: auto;
 }
 
 .btn-alt-fire {
@@ -1525,8 +2004,10 @@ button:disabled {
   padding: 8px 10px !important;
   background: #ff2200 !important;
   color: #fff !important;
-  width: 100%;
-  margin-top: 2px;
+  border: 2px solid #000 !important;
+  box-shadow: 2px 2px 0 #000;
+  cursor: pointer;
+  font-family: "Press Start 2P", monospace;
 }
 
 /* Loadout reveal */
@@ -1656,30 +2137,36 @@ button:disabled {
 }
 
 .wind-box {
-  min-width: 160px;
+  min-width: 0;
+  padding: 6px 10px;
 }
 
-.wind-visual {
+.wind-box strong {
+  margin-bottom: 0;
+  font-size: 9px;
+}
+
+.wind-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-top: 4px;
+  gap: 6px;
 }
 
 .wind-dir {
-  font-size: 18px;
+  font-size: 14px;
   color: var(--accent-2);
-  min-width: 3.5em;
+  min-width: 1.2em;
+  text-align: center;
 }
 
 .wind-meter {
-  flex: 1;
-  height: 10px;
+  width: 56px;
+  flex: 0 0 56px;
+  height: 8px;
   background: linear-gradient(90deg, #334 0%, #222 50%, #334 100%);
   border: 2px solid #000;
   position: relative;
   overflow: hidden;
-  min-width: 70px;
 }
 
 .wind-meter > i {
@@ -1690,23 +2177,23 @@ button:disabled {
 }
 
 .wind-val {
-  font-size: 16px;
+  font-size: 14px;
   color: var(--text);
-  min-width: 2.8em;
-}
-
-.wind-hint {
-  font-size: 13px !important;
-  margin-top: 4px;
+  min-width: 2.4em;
+  font-variant-numeric: tabular-nums;
 }
 
 .map-chip {
-  margin-top: 6px;
+  margin-top: 4px;
   font-family: "Press Start 2P", monospace;
-  font-size: 7px;
+  font-size: 6px;
   color: var(--accent);
-  letter-spacing: 0.04em;
-  line-height: 1.4;
+  letter-spacing: 0.03em;
+  line-height: 1.35;
+  max-width: 14em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 @keyframes menu-glow {

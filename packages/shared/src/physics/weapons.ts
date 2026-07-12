@@ -1,5 +1,6 @@
-import { VoxelMaterial, type WeaponDef } from "../types.js";
-import type { VoxelWorld } from "../voxels.js";
+import { createRng, hashSeed } from "../rng.js";
+import { VoxelMaterial, type TerrainOp, type WeaponDef } from "../types.js";
+import { isSolid, type VoxelWorld } from "../voxels.js";
 import {
   computeDamage,
   muzzleOrigin,
@@ -218,6 +219,7 @@ export interface DamageTarget {
 /**
  * Apply all blasts to targets. Returns total damage per target id.
  * Caps multi-blast stacking so scatter can't delete a tank in one volley unfairly.
+ * Tornado weapons deal no impact damage — HP comes from the toss only.
  */
 export function resolveBlastDamage(
   weapon: WeaponDef,
@@ -225,6 +227,7 @@ export function resolveBlastDamage(
   targets: DamageTarget[],
 ): Map<string, number> {
   const totals = new Map<string, number>();
+  if (isTornadoWeapon(weapon)) return totals;
 
   for (const blast of blasts) {
     for (const t of targets) {
@@ -260,9 +263,19 @@ export function resolveBlastDamage(
  */
 export const TERRAIN_BLAST_SCALE = 1.45;
 
+export function isTornadoWeapon(
+  weapon?: Pick<WeaponDef, "trajectory" | "behavior" | "id"> | null,
+): boolean {
+  return (
+    weapon?.behavior === "tornado" ||
+    weapon?.id === "dust_devil"
+  );
+}
+
 /**
  * Convert blasts to terrain stamps.
  * Drill (Bunker Buster): deep shaft + undercut to strip cover and drop tanks.
+ * Dust Devil: almost no dig — tornado flings tanks, doesn't excavate the map.
  */
 export function blastsToTerrainOps(
   blasts: BlastPoint[],
@@ -275,6 +288,10 @@ export function blastsToTerrainOps(
 
   if (isDrill) {
     return drillTerrainOps(blasts);
+  }
+
+  if (isTornadoWeapon(weapon)) {
+    return tornadoTerrainOps(blasts);
   }
 
   return blasts.map((b) => {
@@ -290,6 +307,447 @@ export function blastsToTerrainOps(
       material: VoxelMaterial.Air,
     };
   });
+}
+
+/**
+ * Dust Devil terrain: tiny surface scuff only.
+ * Real damage is knockback (resolveTornadoThrows), not craters.
+ */
+function tornadoTerrainOps(blasts: BlastPoint[]): TerrainOp[] {
+  return blasts.map((b) => ({
+    kind: "sphere" as const,
+    // Slightly above impact so we barely nick grass/dust, not carve a pit
+    x: b.x,
+    y: b.y + 0.4,
+    z: b.z,
+    radius: 1.35,
+    material: VoxelMaterial.Air,
+  }));
+}
+
+export interface TornadoTarget {
+  id: string;
+  x: number;
+  y: number;
+  /** Shooter can still be flung (self-risk). */
+  isShooter?: boolean;
+}
+
+export interface TornadoThrowResult {
+  id: string;
+  x: number;
+  y: number;
+  /** HP loss from fling + wall smash / hard landing. */
+  tossDamage: number;
+  /** True if path ends in open sky (caller should eliminate as fall). */
+  intoVoid: boolean;
+  /** Hit a solid wall/cliff mid-flight (digs terrain). */
+  hitTerrain: boolean;
+  /** Horizontal fling: left (−1) or right (+1). Independent of blast center. */
+  dir: -1 | 1;
+  /** Horizontal distance actually traveled. */
+  distance: number;
+  /** Peak loft above start height. */
+  loft: number;
+  /** Combined fling magnitude (for pick-strongest + UI). */
+  impulse: number;
+  /** Craters carved when the body smashes into dirt. */
+  digOps: TerrainOp[];
+}
+
+export interface TornadoThrowBatch {
+  throws: TornadoThrowResult[];
+  /** All collision digs (apply to world + broadcast). */
+  terrainOps: TerrainOp[];
+}
+
+/**
+ * Fling tanks with a random ballistic toss (left/right + up).
+ * Steps the path so bodies don't phase through islands — mid-air hits dig
+ * a crater, deal smash damage, and stop short of clipping through.
+ */
+export function resolveTornadoThrows(
+  world: VoxelWorld,
+  blasts: BlastPoint[],
+  targets: TornadoTarget[],
+  midZ: number,
+  weapon?: Pick<WeaponDef, "damage" | "blastRadius" | "id">,
+): TornadoThrowBatch {
+  if (blasts.length === 0 || targets.length === 0) {
+    return { throws: [], terrainOps: [] };
+  }
+
+  const throwRadius = Math.max(9, (weapon?.blastRadius ?? 5.2) * 1.75);
+  const baseDmg = weapon?.damage ?? 34;
+  const byId = new Map<string, TornadoThrowResult>();
+  const terrainOps: TerrainOp[] = [];
+  const z0 = Math.max(0, Math.min(world.depth - 1, Math.floor(midZ)));
+
+  for (const blast of blasts) {
+    for (const t of targets) {
+      const dist = Math.hypot(t.x - blast.x, t.y - blast.y);
+      if (dist > throwRadius) continue;
+
+      const rng = createRng(
+        hashSeed(
+          "tornado",
+          weapon?.id ?? "dust_devil",
+          Math.round(blast.x * 10),
+          Math.round(blast.y * 10),
+          t.id,
+        ),
+      );
+
+      const proximity = 1 - dist / throwRadius;
+      const dir: -1 | 1 = rng() < 0.5 ? -1 : 1;
+
+      // Launch speeds — random horizontal + upward (chaotic, not away-from-blast)
+      const hSpeed = (7 + proximity * 7 + rng() * 7) * (0.9 + rng() * 0.25);
+      const vSpeed = 9 + proximity * 9 + rng() * 10;
+      const impulse = Math.hypot(hSpeed, vSpeed);
+
+      const sim = simulateTankToss(world, {
+        x: t.x,
+        y: t.y,
+        z: z0,
+        vx: dir * hSpeed,
+        vy: vSpeed,
+        dir,
+      });
+
+      // Base fling damage + bonus for smashing into a wall or hard fall
+      let tossDamage = Math.max(
+        10,
+        Math.round(baseDmg * (0.45 + proximity * 0.5) + impulse * 0.35),
+      );
+      if (sim.hitTerrain) {
+        tossDamage += Math.round(
+          12 + impulse * 0.25 + Math.min(18, sim.impactSpeed * 0.35),
+        );
+      }
+      if (sim.fallDrop > 3) {
+        tossDamage += Math.round(Math.min(20, (sim.fallDrop - 3) * 1.4));
+      }
+      tossDamage = Math.min(72, tossDamage);
+
+      const next: TornadoThrowResult = {
+        id: t.id,
+        x: sim.x,
+        y: sim.y,
+        tossDamage,
+        intoVoid: sim.intoVoid,
+        hitTerrain: sim.hitTerrain,
+        dir,
+        distance: Math.abs(sim.x - t.x),
+        loft: sim.peakLoft,
+        impulse,
+        digOps: sim.digOps,
+      };
+      const prev = byId.get(t.id);
+      if (!prev || next.impulse > prev.impulse) {
+        // If replacing a previous toss, drop its digs from the batch list
+        if (prev) {
+          for (const op of prev.digOps) {
+            const idx = terrainOps.indexOf(op);
+            if (idx >= 0) terrainOps.splice(idx, 1);
+          }
+        }
+        byId.set(t.id, next);
+        for (const op of next.digOps) terrainOps.push(op);
+      }
+    }
+  }
+
+  // Stamp collision digs into the live world so later tanks hit open path
+  for (const op of terrainOps) {
+    if (op.kind === "ellipsoid") {
+      world.stampEllipsoid(
+        Math.round(op.x),
+        Math.round(op.y),
+        Math.round(op.z),
+        op.radius,
+        op.radiusY ?? op.radius,
+        op.radiusZ ?? op.radius,
+        VoxelMaterial.Air,
+        true,
+      );
+    } else {
+      world.stampSphere(
+        Math.round(op.x),
+        Math.round(op.y),
+        Math.round(op.z),
+        op.radius,
+        VoxelMaterial.Air,
+        true,
+      );
+    }
+  }
+
+  return { throws: [...byId.values()], terrainOps };
+}
+
+interface TossSim {
+  x: number;
+  y: number;
+  intoVoid: boolean;
+  hitTerrain: boolean;
+  peakLoft: number;
+  fallDrop: number;
+  impactSpeed: number;
+  digOps: TerrainOp[];
+}
+
+/**
+ * Integrate a tank body through the air. Collides with solid voxels mid-flight
+ * (no phasing through islands). On hit: dig a smash crater and stop.
+ */
+function simulateTankToss(
+  world: VoxelWorld,
+  opts: {
+    x: number;
+    y: number;
+    z: number;
+    vx: number;
+    vy: number;
+    dir: -1 | 1;
+  },
+): TossSim {
+  const g = 28;
+  const dt = 0.04;
+  const maxT = 2.4;
+  const maxHoriz = 26;
+  const bodyR = 0.55;
+  let x = opts.x;
+  let y = opts.y + 1.05;
+  let vx = opts.vx;
+  let vy = opts.vy;
+  let peakY = y;
+  const startY = y;
+  const startX = opts.x;
+  const digOps: TerrainOp[] = [];
+  let impactSpeed = 0;
+
+  const solidAt = (px: number, py: number): boolean => {
+    const ix = Math.floor(px);
+    const iy = Math.floor(py);
+    if (!world.inBounds(ix, iy, opts.z)) return false;
+    return isSolid(world.get(ix, iy, opts.z));
+  };
+
+  // Clear of own starting footprint briefly
+  const freeUntil = 0.12;
+
+  for (let t = 0; t < maxT; t += dt) {
+    const nx = x + vx * dt;
+    const ny = y + vy * dt;
+    const nvy = vy - g * dt;
+
+    // Sub-step the segment for reliable collision
+    const sub = 4;
+    let cx = x;
+    let cy = y;
+    let blocked = false;
+    for (let s = 1; s <= sub; s++) {
+      const u = s / sub;
+      const sx = x + (nx - x) * u;
+      const sy = y + (ny - y) * u;
+
+      if (sx < 1 || sx > world.width - 2) {
+        cx = Math.max(1.5, Math.min(world.width - 2.5, sx));
+        cy = sy;
+        blocked = true;
+        impactSpeed = Math.hypot(vx, vy);
+        digOps.push({
+          kind: "sphere",
+          x: cx,
+          y: cy,
+          z: opts.z,
+          radius: 2.0,
+          material: VoxelMaterial.Air,
+        });
+        break;
+      }
+
+      // Sample a few points on the body (center + lower hull)
+      const samples = [
+        [sx, sy],
+        [sx, sy - bodyR * 0.7],
+        [sx + opts.dir * bodyR * 0.5, sy],
+        [sx - opts.dir * bodyR * 0.35, sy - bodyR * 0.3],
+      ] as const;
+
+      let hit = false;
+      for (const [hx, hy] of samples) {
+        if (solidAt(hx, hy)) {
+          hit = true;
+          break;
+        }
+      }
+
+      // Don't collide with the ground column we launched from in the first frames
+      if (hit && (t > freeUntil || Math.hypot(sx - opts.x, sy - startY) > 1.8)) {
+        const surface = world.sampleGroundY(sx, opts.z);
+        // Soft landing on top of terrain (falling onto a roof) — no smash dig
+        if (
+          surface >= 0 &&
+          nvy <= 1.5 &&
+          sy <= surface + 1.35 &&
+          sy >= surface - 0.2
+        ) {
+          return {
+            x: Math.max(1.5, Math.min(world.width - 2.5, sx)),
+            y: surface,
+            intoVoid: false,
+            hitTerrain: false,
+            peakLoft: Math.max(peakY, sy) - startY,
+            fallDrop: Math.max(0, Math.max(peakY, sy) - surface),
+            impactSpeed: Math.abs(nvy),
+            digOps,
+          };
+        }
+
+        // Wall / cliff / underside smash — dig and stop
+        cx = sx - opts.dir * 0.35;
+        cy = sy + 0.25;
+        blocked = true;
+        impactSpeed = Math.hypot(vx, nvy);
+        const smashR = Math.min(2.8, 1.5 + Math.min(22, impactSpeed) * 0.05);
+        digOps.push({
+          kind: "sphere",
+          x: sx,
+          y: sy - 0.2,
+          z: opts.z,
+          radius: smashR,
+          material: VoxelMaterial.Air,
+        });
+        digOps.push({
+          kind: "sphere",
+          x: sx + opts.dir * smashR * 0.4,
+          y: sy - 0.35,
+          z: opts.z,
+          radius: smashR * 0.65,
+          material: VoxelMaterial.Air,
+        });
+        break;
+      }
+
+      cx = sx;
+      cy = sy;
+    }
+
+    x = cx;
+    y = cy;
+    if (y > peakY) peakY = y;
+
+    if (blocked) {
+      const ground = world.sampleGroundY(x, opts.z);
+      if (ground < 0) {
+        return {
+          x,
+          y: -6,
+          intoVoid: true,
+          hitTerrain: true,
+          peakLoft: peakY - startY,
+          fallDrop: peakY + 6,
+          impactSpeed,
+          digOps,
+        };
+      }
+      return {
+        x: Math.max(1.5, Math.min(world.width - 2.5, x)),
+        y: ground,
+        intoVoid: false,
+        hitTerrain: true,
+        peakLoft: peakY - startY,
+        fallDrop: Math.max(0, peakY - ground),
+        impactSpeed,
+        digOps,
+      };
+    }
+
+    vy = nvy;
+
+    // Soft land on top of terrain while falling
+    const ground = world.sampleGroundY(x, opts.z);
+    if (ground >= 0 && vy <= 0 && y <= ground + 0.45 && t > freeUntil) {
+      return {
+        x: Math.max(1.5, Math.min(world.width - 2.5, x)),
+        y: ground,
+        intoVoid: false,
+        hitTerrain: false,
+        peakLoft: peakY - startY,
+        fallDrop: Math.max(0, peakY - ground),
+        impactSpeed: Math.abs(vy),
+        digOps,
+      };
+    }
+
+    // Cap runaway horizontal flings on open flats
+    if (Math.abs(x - startX) >= maxHoriz && vy <= 0) {
+      const g2 = world.sampleGroundY(x, opts.z);
+      if (g2 < 0) {
+        return {
+          x,
+          y: -6,
+          intoVoid: true,
+          hitTerrain: false,
+          peakLoft: peakY - startY,
+          fallDrop: peakY + 6,
+          impactSpeed: Math.abs(vy),
+          digOps,
+        };
+      }
+      return {
+        x: Math.max(1.5, Math.min(world.width - 2.5, x)),
+        y: g2,
+        intoVoid: false,
+        hitTerrain: false,
+        peakLoft: peakY - startY,
+        fallDrop: Math.max(0, peakY - g2),
+        impactSpeed: Math.abs(vy),
+        digOps,
+      };
+    }
+
+    // Fell off the world
+    if (y < -2 || (ground < 0 && y < 2 && vy < 0 && t > 0.35)) {
+      return {
+        x: Math.max(1.5, Math.min(world.width - 2.5, x)),
+        y: -6,
+        intoVoid: true,
+        hitTerrain: false,
+        peakLoft: peakY - startY,
+        fallDrop: peakY + 6,
+        impactSpeed: Math.abs(vy),
+        digOps,
+      };
+    }
+  }
+
+  // Timeout: snap to ground under final x
+  const ground = world.sampleGroundY(x, opts.z);
+  if (ground < 0) {
+    return {
+      x,
+      y: -6,
+      intoVoid: true,
+      hitTerrain: false,
+      peakLoft: peakY - startY,
+      fallDrop: peakY + 6,
+      impactSpeed: Math.abs(vy),
+      digOps,
+    };
+  }
+  return {
+    x: Math.max(1.5, Math.min(world.width - 2.5, x)),
+    y: ground,
+    intoVoid: false,
+    hitTerrain: false,
+    peakLoft: peakY - startY,
+    fallDrop: Math.max(0, peakY - ground),
+    impactSpeed: Math.abs(vy),
+    digOps,
+  };
 }
 
 /**

@@ -9,7 +9,8 @@ export type ShellStyle =
   | "bounce"
   | "nuke"
   | "triple"
-  | "homing";
+  | "homing"
+  | "tornado";
 
 export function shellStyleFor(weapon?: WeaponDef | null): ShellStyle {
   if (!weapon) return "pea";
@@ -28,7 +29,10 @@ export function shellStyleFor(weapon?: WeaponDef | null): ShellStyle {
       return "triple";
     case "heat_seeker":
       return "homing";
+    case "dust_devil":
+      return "tornado";
     default:
+      if (weapon.behavior === "tornado") return "tornado";
       return weapon.trajectory === "homing" ? "homing" : "pea";
   }
 }
@@ -162,6 +166,42 @@ export function createShellMesh(style: ShellStyle, color: number): THREE.Group {
       group.add(exhaust, body, nose);
       break;
     }
+    case "tornado": {
+      // Mini twister seed: stacked dusty rings + core
+      const core = new THREE.Mesh(
+        new THREE.ConeGeometry(0.22, 1.1, 8),
+        bodyMat,
+      );
+      core.rotation.z = -Math.PI / 2;
+      const dustA = new THREE.Mesh(
+        new THREE.TorusGeometry(0.38, 0.08, 6, 14),
+        new THREE.MeshBasicMaterial({
+          color,
+          transparent: true,
+          opacity: 0.85,
+        }),
+      );
+      dustA.rotation.y = Math.PI / 2;
+      dustA.position.x = 0.15;
+      const dustB = new THREE.Mesh(
+        new THREE.TorusGeometry(0.55, 0.07, 6, 16),
+        new THREE.MeshBasicMaterial({
+          color: 0xe8d4a0,
+          transparent: true,
+          opacity: 0.55,
+        }),
+      );
+      dustB.rotation.y = Math.PI / 2;
+      dustB.position.x = -0.15;
+      const grit = new THREE.Mesh(
+        new THREE.IcosahedronGeometry(0.28, 0),
+        rimMat,
+      );
+      grit.position.x = 0.45;
+      const glow = new THREE.Mesh(new THREE.SphereGeometry(0.9, 10, 10), glowMat);
+      group.add(glow, core, dustA, dustB, grit);
+      break;
+    }
   }
 
   return group;
@@ -194,6 +234,8 @@ export function trailProfileFor(style: ShellStyle): TrailProfile {
       return { size: 0.5, opacity: 1, count: 54, every: 1, sparkle: true };
     case "homing":
       return { size: 0.38, opacity: 0.95, count: 52, every: 1, sparkle: true };
+    case "tornado":
+      return { size: 0.55, opacity: 0.8, count: 70, every: 1, sparkle: true };
   }
 }
 
@@ -295,6 +337,18 @@ export function explosionProfileFor(style: ShellStyle, color: number): Explosion
         flashColor: 0xff6688,
         spread: 13,
         flashScale: 2.0,
+        ring: true,
+        sparks: true,
+      };
+    case "tornado":
+      // Long-lived debris whirl (spawnExplosion special-cases motion)
+      return {
+        count: 56,
+        size: 0.85,
+        life: 1.35,
+        flashColor: 0xe8d090,
+        spread: 16,
+        flashScale: 1.4,
         ring: true,
         sparks: true,
       };

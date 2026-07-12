@@ -424,9 +424,15 @@ export class GameRenderer {
     const color = weapon?.color ?? 0xff8844;
     // Drill stacks several stamps — only VFX the mouth + a couple punches
     const vfxOps =
-      style === "drill" ? ops.filter((_, i) => i === 0 || i === ops.length - 1 || i === 1) : ops;
+      style === "drill" || style === "tornado"
+        ? ops.filter((_, i) => i === 0 || i === 1 || i === ops.length - 1)
+        : ops;
     const stagger =
-      style === "scatter" || style === "triple" ? 85 : style === "drill" ? 60 : 0;
+      style === "scatter" || style === "triple"
+        ? 85
+        : style === "drill" || style === "tornado"
+          ? 55
+          : 0;
     vfxOps.forEach((op, i) => {
       window.setTimeout(() => {
         this.spawnExplosion(op, color, style);
@@ -443,6 +449,11 @@ export class GameRenderer {
     color = 0xff8844,
     style: ShellStyle = "pea",
   ): void {
+    if (style === "tornado") {
+      this.spawnTornadoWhirl(op, color);
+      return;
+    }
+
     const profile = explosionProfileFor(style, color);
     const count = profile.count;
     const geo = new THREE.BufferGeometry();
@@ -545,6 +556,122 @@ export class GameRenderer {
       requestAnimationFrame(tick);
     };
     requestAnimationFrame(tick);
+  }
+
+  /** Dust Devil impact: spinning funnel mesh + orbiting debris cloud. */
+  private spawnTornadoWhirl(op: TerrainOp, color: number): void {
+    const origin = new THREE.Vector3(op.x, op.y + 0.4, op.z);
+    const life = 1.45;
+    const debrisCount = 64;
+
+    const funnel = new THREE.Mesh(
+      new THREE.ConeGeometry(0.6, 5.5, 12, 1, true),
+      new THREE.MeshBasicMaterial({
+        color: 0xd4c090,
+        transparent: true,
+        opacity: 0.42,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      }),
+    );
+    funnel.position.copy(origin);
+    funnel.position.y += 2.2;
+    this.scene.add(funnel);
+
+    const ring = new THREE.Mesh(
+      new THREE.TorusGeometry(1.6, 0.18, 8, 28),
+      new THREE.MeshBasicMaterial({
+        color: 0xe8d4a0,
+        transparent: true,
+        opacity: 0.7,
+        depthWrite: false,
+      }),
+    );
+    ring.rotation.x = Math.PI / 2;
+    ring.position.copy(origin);
+    ring.position.y += 0.3;
+    this.scene.add(ring);
+
+    const geo = new THREE.BufferGeometry();
+    const positions = new Float32Array(debrisCount * 3);
+    for (let i = 0; i < debrisCount; i++) {
+      positions[i * 3] = origin.x;
+      positions[i * 3 + 1] = origin.y;
+      positions[i * 3 + 2] = origin.z;
+    }
+    geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+    const mat = new THREE.PointsMaterial({
+      color,
+      size: 0.9,
+      transparent: true,
+      opacity: 1,
+      depthWrite: false,
+    });
+    const points = new THREE.Points(geo, mat);
+    this.scene.add(points);
+
+    // Each particle: angle, radius, rise speed, spin rate, size phase
+    const bits = Array.from({ length: debrisCount }, (_, i) => {
+      const layer = i / debrisCount;
+      return {
+        ang: Math.random() * Math.PI * 2,
+        spin: 4 + Math.random() * 9,
+        r0: 0.4 + layer * 3.2 + Math.random() * 0.6,
+        rGrow: 1.5 + Math.random() * 3.5,
+        y0: Math.random() * 0.4,
+        ySpeed: 2.5 + Math.random() * 7,
+        phase: Math.random() * Math.PI * 2,
+      };
+    });
+
+    const t0 = performance.now();
+    const tick = () => {
+      const t = (performance.now() - t0) / 1000;
+      if (t > life) {
+        this.scene.remove(points);
+        this.scene.remove(funnel);
+        this.scene.remove(ring);
+        geo.dispose();
+        mat.dispose();
+        funnel.geometry.dispose();
+        (funnel.material as THREE.Material).dispose();
+        ring.geometry.dispose();
+        (ring.material as THREE.Material).dispose();
+        return;
+      }
+      const fade = 1 - t / life;
+      const pos = geo.attributes.position as THREE.BufferAttribute;
+      for (let i = 0; i < debrisCount; i++) {
+        const b = bits[i]!;
+        const ang = b.ang + t * b.spin;
+        const r = b.r0 + t * b.rGrow;
+        const yy = origin.y + b.y0 + t * b.ySpeed;
+        // Slight vertical wobble so the column reads as a whirlwind
+        const wobble = Math.sin(t * 8 + b.phase) * 0.25;
+        pos.setXYZ(
+          i,
+          origin.x + Math.cos(ang) * r + wobble,
+          yy,
+          origin.z + Math.sin(ang) * r * 0.55,
+        );
+      }
+      pos.needsUpdate = true;
+      mat.opacity = fade;
+      funnel.rotation.y += 0.18;
+      funnel.scale.set(
+        1 + t * 0.55,
+        1 + t * 0.25,
+        1 + t * 0.55,
+      );
+      (funnel.material as THREE.MeshBasicMaterial).opacity = 0.42 * fade;
+      ring.rotation.z += 0.22;
+      const rs = 1 + t * 2.2;
+      ring.scale.set(rs, rs, rs);
+      (ring.material as THREE.MeshBasicMaterial).opacity = 0.7 * fade;
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+    this.shake(0.45, 0.28);
   }
 
   /** Floating "-42" style damage popup above a world point. */
@@ -910,6 +1037,12 @@ export class GameRenderer {
             (path[Math.min(path.length - 1, i0 + 1)]?.y ?? py) - py,
             (path[Math.min(path.length - 1, i0 + 1)]?.x ?? px) - px,
           );
+        } else if (style === "tornado") {
+          // Spinning dust seed in flight
+          shell.mesh.rotation.x += dt * 18;
+          shell.mesh.rotation.y += dt * 14;
+          const pulse = 1 + Math.sin(now * 0.02 + si) * 0.12;
+          shell.mesh.scale.setScalar(pulse);
         }
 
         if (si === 0) {
@@ -926,11 +1059,17 @@ export class GameRenderer {
           this.trailPositions[ti + 2] = pz;
           this.trailIndex++;
           // Sparkle: write a second offset point
-          if (style === "triple" || style === "scatter" || style === "nuke") {
+          if (
+            style === "triple" ||
+            style === "scatter" ||
+            style === "nuke" ||
+            style === "tornado"
+          ) {
             const tj = (this.trailIndex % (this.trailPositions.length / 3)) * 3;
-            this.trailPositions[tj] = px + (Math.random() - 0.5) * 0.4;
-            this.trailPositions[tj + 1] = py + (Math.random() - 0.5) * 0.4;
-            this.trailPositions[tj + 2] = pz;
+            const swirl = style === "tornado" ? 0.85 : 0.4;
+            this.trailPositions[tj] = px + (Math.random() - 0.5) * swirl;
+            this.trailPositions[tj + 1] = py + (Math.random() - 0.5) * swirl;
+            this.trailPositions[tj + 2] = pz + (Math.random() - 0.5) * swirl * 0.5;
             this.trailIndex++;
           }
         }

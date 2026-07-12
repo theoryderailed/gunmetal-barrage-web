@@ -283,32 +283,48 @@ export function generateMap(
     }
   }
 
-  // Voxel fill
+  // Voxel fill — floating islands: solid only between underside and surface,
+  // open sky below. Digging through the bottom drops tanks into the void.
   for (let x = 0; x < w; x++) {
     const surface = surfaceY[x]!;
     for (let z = 0; z < d; z++) {
       const edgeFade = 1 - Math.abs(z - midZ) / (d * 0.55);
       const colHeight = Math.floor(surface * Math.max(0.55, edgeFade));
+      if (colHeight < 2) continue;
 
-      for (let y = 0; y <= colHeight; y++) {
+      // Sky gap under the island (varies along X so undersides look natural)
+      const skyGap =
+        3 +
+        Math.floor(
+          (fbm2D(x * 0.045, z * 0.08, seed + 77, 3) * 0.5 + 0.5) * 9,
+        );
+      // Island thickness: thicker under high peaks, always diggable through
+      const thickNoise =
+        fbm2D(x * 0.07, 0.2, seed + 31, 3) * 0.5 + 0.5;
+      let thickness = Math.floor(7 + colHeight * 0.32 + thickNoise * 7);
+      thickness = Math.max(4, Math.min(thickness, colHeight - skyGap));
+      if (thickness < 4) thickness = Math.min(4, colHeight);
+      const bottom = Math.max(0, colHeight - thickness);
+
+      for (let y = bottom; y <= colHeight; y++) {
         world.set(
           x,
           y,
           z,
-          surfaceMaterial(biomePick.biome, y, colHeight, x, seed, rng),
+          islandMaterial(biomePick.biome, y, bottom, colHeight, x, seed, rng),
         );
       }
 
-      // Caves
+      // Caves inside the island body only
       if (biomePick.biome !== "arctic" && x > 18 && x < w - 18) {
-        for (let y = 6; y < colHeight - 4; y++) {
+        const caveLo = bottom + 2;
+        const caveHi = colHeight - 3;
+        for (let y = caveLo; y < caveHi; y++) {
           const cave = fbm2D(x * 0.08, y * 0.1, seed + 42, 3);
           const lo = biomePick.biome === "volcanic" ? 0.56 : 0.61;
           const hi = biomePick.biome === "volcanic" ? 0.72 : 0.73;
           if (cave > lo && cave < hi) {
-            if (world.get(x, y, z) !== VoxelMaterial.Bedrock) {
-              world.set(x, y, z, VoxelMaterial.Air);
-            }
+            world.set(x, y, z, VoxelMaterial.Air);
           }
         }
       }
@@ -454,6 +470,93 @@ function makeTrenches(w: number, rng: () => number): Trench[] {
     });
   }
   return trenches;
+}
+
+/**
+ * Pick random valid surface positions on the *current* map (no pad flattening).
+ * Used for sandbox respawn so tanks land on walkable, gentle ground after digs.
+ */
+export function pickRandomValidSpawns(
+  world: VoxelWorld,
+  count: number,
+  seed = Date.now() >>> 0,
+  midZ = Math.floor(world.depth / 2),
+): Vec2[] {
+  const rng = createRng(seed);
+  const w = world.width;
+  const h = world.height;
+  type Cand = { x: number; y: number };
+  const candidates: Cand[] = [];
+
+  for (let x = 12; x < w - 12; x++) {
+    // Require walkable footing (floating islands may have void columns)
+    if (world.isVoidColumn(x + 0.5, midZ)) continue;
+    const y0 = world.surfaceY(x, midZ);
+    if (y0 < 4 || y0 > h - 10) continue;
+    const ground = world.sampleGroundY(x + 0.5, midZ);
+    if (ground < 0) continue;
+
+    const yL = world.surfaceY(x - 2, midZ);
+    const yR = world.surfaceY(x + 2, midZ);
+    if (yL < 0 || yR < 0) continue;
+    const slope = Math.abs(yL - yR);
+    if (slope > 3) continue; // too steep to stand
+
+    // Skip razor peaks / tiny pillars
+    const yL2 = world.surfaceY(x - 1, midZ);
+    const yR2 = world.surfaceY(x + 1, midZ);
+    if (yL2 < 0 || yR2 < 0) continue;
+    if (Math.abs(y0 - yL2) > 1.5 || Math.abs(y0 - yR2) > 1.5) continue;
+
+    candidates.push({ x, y: ground });
+  }
+
+  // Fisher–Yates shuffle
+  for (let i = candidates.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    const tmp = candidates[i]!;
+    candidates[i] = candidates[j]!;
+    candidates[j] = tmp;
+  }
+
+  const minDist = Math.max(14, Math.floor(w / (count + 3)));
+  const picked: Cand[] = [];
+  for (const c of candidates) {
+    if (picked.length >= count) break;
+    if (picked.some((p) => Math.abs(p.x - c.x) < minDist)) continue;
+    // Refresh y in case terrain changed (caller may dig between checks)
+    const g = world.sampleGroundY(c.x + 0.5, midZ);
+    if (g < 0) continue;
+    picked.push({ x: c.x + 0.5, y: g });
+  }
+
+  // Fallback: space evenly and take nearest valid column
+  let guard = 0;
+  while (picked.length < count && guard++ < 40) {
+    const t = (picked.length + 1) / (count + 1);
+    let x = Math.floor(14 + t * (w - 28) + (rng() - 0.5) * 12);
+    x = Math.max(12, Math.min(w - 13, x));
+    // Search nearby for a valid column
+    let found: Cand | null = null;
+    for (let d = 0; d < 20 && !found; d++) {
+      for (const sign of d === 0 ? [0] : [1, -1]) {
+        const xx = x + sign * d;
+        if (xx < 12 || xx >= w - 12) continue;
+        if (world.isVoidColumn(xx + 0.5, midZ)) continue;
+        const g = world.sampleGroundY(xx + 0.5, midZ);
+        if (g < 0) continue;
+        if (picked.some((p) => Math.abs(p.x - (xx + 0.5)) < minDist * 0.5)) {
+          continue;
+        }
+        found = { x: xx + 0.5, y: g };
+        break;
+      }
+    }
+    if (found) picked.push(found);
+    else break;
+  }
+
+  return picked;
 }
 
 /**
@@ -611,46 +714,56 @@ function biomeProfile(biome: MapBiome, h: number, rng: () => number) {
   }
 }
 
-function surfaceMaterial(
+/**
+ * Materials for a floating-island column (y from underside `bottom` to `top`).
+ * Underside is dark rock (destructible) so blasts can open the floor into open sky.
+ * No indestructible bedrock slab.
+ */
+function islandMaterial(
   biome: MapBiome,
   y: number,
-  colHeight: number,
+  bottom: number,
+  top: number,
   x: number,
   seed: number,
   rng: () => number,
 ): VoxelMaterial {
-  if (y === 0) return VoxelMaterial.Bedrock;
+  const thickness = Math.max(1, top - bottom);
+  const rel = (y - bottom) / thickness; // 0 underside → 1 surface
+
+  // Craggy underside of the floating landmass
+  if (y <= bottom + 1) return VoxelMaterial.Rock;
 
   switch (biome) {
     case "desert":
-      if (y < colHeight * 0.3) return VoxelMaterial.Rock;
-      if (y < colHeight - 1) return VoxelMaterial.Sand;
+      if (rel < 0.35) return VoxelMaterial.Rock;
+      if (y < top) return VoxelMaterial.Sand;
       return VoxelMaterial.Sand;
     case "canyon":
-      if (y < colHeight * 0.4) return VoxelMaterial.Rock;
-      if (y < colHeight - 1) return VoxelMaterial.Dirt;
+      if (rel < 0.4) return VoxelMaterial.Rock;
+      if (y < top) return VoxelMaterial.Dirt;
       return VoxelMaterial.Dirt;
     case "volcanic":
-      if (y < colHeight * 0.5) return VoxelMaterial.Rock;
-      if (y === colHeight) return VoxelMaterial.Rock;
+      if (rel < 0.45) return VoxelMaterial.Rock;
+      if (y === top) return VoxelMaterial.Rock;
       return fbm2D(x * 0.12, y * 0.12, seed + 11) > 0.55
         ? VoxelMaterial.Rock
         : VoxelMaterial.Dirt;
     case "arctic":
-      if (y < colHeight * 0.25) return VoxelMaterial.Rock;
-      if (y < colHeight - 1) return VoxelMaterial.Sand;
+      if (rel < 0.3) return VoxelMaterial.Rock;
+      if (y < top) return VoxelMaterial.Sand;
       return VoxelMaterial.Metal;
     case "ruins":
-      if (y < colHeight * 0.35) return VoxelMaterial.Rock;
-      if (y < colHeight - 1) {
+      if (rel < 0.35) return VoxelMaterial.Rock;
+      if (y < top) {
         return fbm2D(x * 0.15, y * 0.1, seed + 3) > 0.65
           ? VoxelMaterial.Metal
           : VoxelMaterial.Dirt;
       }
       return rng() > 0.7 ? VoxelMaterial.Metal : VoxelMaterial.Grass;
     default:
-      if (y < colHeight * 0.35) return VoxelMaterial.Rock;
-      if (y < colHeight - 1) {
+      if (rel < 0.35) return VoxelMaterial.Rock;
+      if (y < top) {
         if (fbm2D(x * 0.1, y * 0.1, seed + 99) > 0.72) return VoxelMaterial.Sand;
         return VoxelMaterial.Dirt;
       }
@@ -671,6 +784,8 @@ function flattenSpawnPad(
     world.surfaceY(cx - 1, cz),
     world.surfaceY(cx + 1, cz),
   );
+  // Keep pad as a floating shelf (not a pillar to y=0)
+  const padBottom = Math.max(2, targetY - 5);
   const topMat =
     biome === "desert" || biome === "arctic"
       ? VoxelMaterial.Sand
@@ -690,10 +805,10 @@ function flattenSpawnPad(
       const z = cz + dz;
       if (!world.inBounds(x, 0, z)) continue;
       for (let y = 0; y < world.height; y++) {
-        if (y < targetY) {
+        if (y >= padBottom && y < targetY) {
           const mat =
-            y === 0
-              ? VoxelMaterial.Bedrock
+            y === padBottom
+              ? VoxelMaterial.Rock
               : y === targetY - 1
                 ? topMat
                 : fillMat;

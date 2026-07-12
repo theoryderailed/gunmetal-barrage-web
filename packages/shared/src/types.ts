@@ -65,6 +65,7 @@ export type WeaponBehavior =
   | "drill"
   | "lob"
   | "homing"
+  | "tornado"
   | "special";
 
 export interface WeaponDef {
@@ -90,6 +91,11 @@ export interface WeaponDef {
    * Only equipped as secondary (one-shot specials). Never rolled as primary.
    */
   secondaryOnly?: boolean;
+  /**
+   * Infinite-ammo fallback when primary is empty (Peashooter). Never rolled as
+   * primary or secondary — swapped in at fire time only.
+   */
+  backupOnly?: boolean;
 }
 export interface ChassisDef {
   id: string;

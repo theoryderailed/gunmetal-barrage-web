@@ -12,9 +12,11 @@ import {
   generateMap,
   getWeaponById,
   hashSeed,
+  isTornadoWeapon,
   moveAlongTerrain,
   moveSpeed,
   resolveBlastDamage,
+  resolveTornadoThrows,
   simulateWeaponFire,
   type DamageEvent,
   type MatchConfig,
@@ -255,22 +257,17 @@ export class MatchSimulation {
   }
 
   /**
-   * Snap tank to walkable surface. Returns true if the tank fell into the void
-   * (bedrock-only / no ground) and should be eliminated.
+   * Snap tank to the top of the floating island. Returns true if there is no
+   * ground underfoot (shot punched through the island) — tank falls to death.
    */
   snapToGround(p: PlayerState): boolean {
     const ground = this.world.sampleGroundY(p.x, this.midZ);
     if (ground < 0 || this.world.isVoidColumn(p.x, this.midZ)) {
-      // Drop through the kill floor
-      p.y = -2;
+      // Drop through open sky below the island
+      p.y = -6;
       return true;
     }
     p.y = ground;
-    // Standing on the absolute bottom strip is also lethal (dug down to bedrock)
-    if (ground <= 1.2) {
-      p.y = -2;
-      return true;
-    }
     return false;
   }
 
@@ -479,6 +476,54 @@ export class MatchSimulation {
         // Direct blast kill — credit shooter (not self)
         if (this.eliminate(targetId, targetId === p.id ? null : p.id, "blast")) {
           eliminated.push(targetId);
+        }
+      }
+    }
+
+    // Dust Devil: ballistic toss — collide with terrain (dig + smash), no clipping
+    if (isTornadoWeapon(weapon) && fired.blasts.length > 0) {
+      const { throws, terrainOps: tossDigs } = resolveTornadoThrows(
+        this.world,
+        fired.blasts,
+        this.getPlayerList()
+          .filter((t) => t.alive)
+          .map((t) => ({
+            id: t.id,
+            x: t.x,
+            y: t.y,
+            isShooter: t.id === p.id,
+          })),
+        this.midZ,
+        weapon,
+      );
+      // Collision digs already stamped into world; mirror into the fire result
+      for (const op of tossDigs) {
+        allOps.push(op);
+        this.terrainOps.push(op);
+      }
+      for (const toss of throws) {
+        const target = this.players.get(toss.id);
+        if (!target || !target.alive) continue;
+        target.x = toss.x;
+        target.y = toss.y;
+        if (toss.id !== p.id) {
+          target.lastAttackerId = p.id;
+          p.damageDealt += toss.tossDamage;
+        }
+        target.hp -= toss.tossDamage;
+        allDamage.push({
+          targetId: toss.id,
+          amount: toss.tossDamage,
+          sourceId: p.id,
+          x: toss.x,
+          y: toss.y,
+        });
+        if (toss.intoVoid || target.hp <= 0) {
+          const killer = toss.id === p.id ? null : p.id;
+          const reason = toss.intoVoid ? "fall" : "blast";
+          if (this.eliminate(toss.id, killer, reason)) {
+            eliminated.push(toss.id);
+          }
         }
       }
     }
