@@ -106,9 +106,7 @@ export function renderMenu(
         </div>
 
         <footer class="menu-footer">
-          <span>Sandbox · keys 1–7 weapons · [ ] cycle</span>
-          <span class="menu-footer-dot">·</span>
-          <span>F flip facing · P pass turn</span>
+          <span>Q/E power · Space fire · A/D move · W/S angle</span>
         </footer>
       </div>
     </div>
@@ -542,19 +540,39 @@ export function renderHud(
     opts.wind < 0 ? "scaleX(-1) translateX(100%)" : "none"
   }`;
 
+  const sandboxCard = opts.sandbox
+    ? `
+    <aside class="sandbox-card" aria-label="Sandbox controls">
+      <strong class="sandbox-card-title">SANDBOX</strong>
+      <ul class="sandbox-card-list">
+        <li><kbd>1</kbd>–<kbd>8</kbd> weapons</li>
+        <li><kbd>[</kbd> <kbd>]</kbd> cycle gun</li>
+        <li><kbd>Space</kbd> fire · <kbd>R</kbd> alt</li>
+        <li><kbd>Q</kbd>/<kbd>E</kbd> power</li>
+        <li><kbd>A</kbd>/<kbd>D</kbd> move · <kbd>W</kbd>/<kbd>S</kbd> angle</li>
+        <li><kbd>F</kbd> flip · click dig</li>
+        <li><kbd>Esc</kbd> menu</li>
+      </ul>
+      <p class="sandbox-card-hint">∞ ammo · RESPAWN in dock</p>
+    </aside>`
+    : "";
+
   root.innerHTML = `
     <div class="hud">
       <div class="crt-overlay"></div>
       <div class="hud-top">
-        <div class="hud-box wind-box">
-          <div class="wind-row">
-            <strong>WIND</strong>
-            <span class="wind-dir">${windArrow(opts.wind)}</span>
-            <div class="wind-meter">
-              <i style="${windMeterStyle}"></i>
+        <div class="hud-top-left">
+          <div class="hud-box wind-box">
+            <div class="wind-row">
+              <strong>WIND</strong>
+              <span class="wind-dir">${windArrow(opts.wind)}</span>
+              <div class="wind-meter">
+                <i style="${windMeterStyle}"></i>
+              </div>
+              <span class="wind-val">${opts.wind >= 0 ? "+" : ""}${opts.wind.toFixed(2)}</span>
             </div>
-            <span class="wind-val">${opts.wind >= 0 ? "+" : ""}${opts.wind.toFixed(2)}</span>
           </div>
+          ${sandboxCard}
         </div>
         <div class="hud-box player-list">
           <div class="player-list-head">

@@ -786,7 +786,7 @@ function startSandbox(): void {
     p.primaryAmmo = 99;
     p.secondaryAmmo = 99;
   }
-  showToast(`Sandbox · ${w.name} · ∞ ammo · keys 1–8 switch weapons`);
+  showToast(`Sandbox · ${w.name} · ∞ ammo`);
 }
 
 /** Revive tanks at random valid surface pads (full HP/fuel). */
