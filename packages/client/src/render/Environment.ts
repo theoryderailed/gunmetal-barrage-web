@@ -14,6 +14,7 @@ type Debris = {
   vy: number;
   life: number;
   maxLife: number;
+  baseOpacity: number;
 };
 
 /**
@@ -72,6 +73,8 @@ export class Environment {
 
     this.hills = new THREE.Group();
     this.group.add(this.hills);
+    // Debris on top of terrain so wind is always readable
+    this.debrisGroup.renderOrder = 10;
     this.group.add(this.debrisGroup);
     scene.add(this.group);
   }
@@ -214,9 +217,9 @@ export class Environment {
     this.hills.position.x = Math.sin(this.time * 0.05) * 1.5;
 
     // Clouds drift with wind bias
-    const windBias = this.wind * 4;
+    const windBias = this.wind * 6;
     for (const c of this.clouds) {
-      c.mesh.position.x += (c.speed * 0.35 + windBias) * dt;
+      c.mesh.position.x += (c.speed * 0.45 + windBias) * dt;
       c.mesh.position.y = c.baseY + Math.sin(this.time * 0.4 + c.phase) * 1.2;
       if (c.mesh.position.x > this.mapWidth * 1.3) {
         c.mesh.position.x = -this.mapWidth * 0.2;
@@ -231,10 +234,11 @@ export class Environment {
 
   /** Spawn / refresh wind debris so direction of wind is readable. */
   private updateDebris(dt: number): void {
-    const strength = Math.abs(this.wind);
-    const dir = this.wind >= 0 ? 1 : -1;
+    // Always show a stream (calm wind still drifts); more particles when stronger
+    const strength = Math.max(0.2, Math.abs(this.wind));
+    const dir = this.wind < -0.02 ? -1 : 1;
     const targetCount =
-      strength < 0.12 ? 8 : strength < 0.6 ? 22 : strength < 1.2 ? 36 : 50;
+      strength < 0.4 ? 52 : strength < 0.85 ? 78 : strength < 1.35 ? 100 : 128;
 
     while (this.debris.length < targetCount) {
       this.spawnDebris(dir, true);
@@ -246,92 +250,115 @@ export class Environment {
       (d.mesh.material as THREE.Material).dispose();
     }
 
-    const speedBase = 6 + strength * 14;
+    const speedBase = 12 + strength * 30;
     for (const d of this.debris) {
+      if (Math.sign(d.vx) !== dir) d.vx = dir * Math.abs(d.vx);
       d.mesh.position.x += d.vx * dt * speedBase;
       d.mesh.position.y += d.vy * dt;
-      d.mesh.rotation.z += dt * 3 * dir;
+      d.mesh.rotation.z += dt * (4 + strength * 4) * dir;
       d.life -= dt;
       const mat = d.mesh.material as THREE.MeshBasicMaterial;
-      mat.opacity = Math.max(0, (d.life / d.maxLife) * 0.75);
+      mat.opacity = d.baseOpacity * Math.max(0.2, d.life / d.maxLife);
 
-      // Wrap horizontally with wind direction
-      if (dir > 0 && d.mesh.position.x > this.mapWidth + 10) {
-        d.mesh.position.x = -8;
-        d.mesh.position.y = 10 + Math.random() * this.mapHeight * 0.7;
-        d.life = d.maxLife;
-      }
-      if (dir < 0 && d.mesh.position.x < -10) {
-        d.mesh.position.x = this.mapWidth + 8;
-        d.mesh.position.y = 10 + Math.random() * this.mapHeight * 0.7;
-        d.life = d.maxLife;
-      }
-      if (d.life <= 0) {
-        d.life = d.maxLife;
-        d.mesh.position.y = 8 + Math.random() * this.mapHeight * 0.75;
-        d.mesh.position.x =
-          dir > 0 ? -5 - Math.random() * 20 : this.mapWidth + 5 + Math.random() * 20;
-        mat.opacity = 0.7;
+      if (
+        (dir > 0 && d.mesh.position.x > this.mapWidth + 14) ||
+        (dir < 0 && d.mesh.position.x < -14) ||
+        d.life <= 0
+      ) {
+        this.recycleDebris(d, dir);
       }
     }
+  }
+
+  private recycleDebris(d: Debris, dir: number): void {
+    d.life = d.maxLife;
+    d.mesh.position.y = 14 + Math.random() * this.mapHeight * 0.65;
+    d.mesh.position.x =
+      dir > 0
+        ? -10 - Math.random() * 28
+        : this.mapWidth + 10 + Math.random() * 28;
+    d.mesh.position.z = this.midZ + (Math.random() - 0.5) * 12;
+    d.vx = dir * (0.9 + Math.random() * 0.5);
+    d.vy = (Math.random() - 0.5) * 1.6;
+    const mat = d.mesh.material as THREE.MeshBasicMaterial;
+    mat.opacity = d.baseOpacity;
   }
 
   private spawnDebris(dir: number, scatter: boolean): void {
     const kinds = Math.random();
     let mesh: THREE.Mesh;
-    if (kinds < 0.4) {
-      // Leaf / petal
+    let baseOpacity = 0.88;
+    if (kinds < 0.32) {
       mesh = new THREE.Mesh(
-        new THREE.PlaneGeometry(0.5, 0.3),
+        new THREE.PlaneGeometry(1.15, 0.55),
         new THREE.MeshBasicMaterial({
-          color: 0xc4a35a,
+          color: 0xe8c878,
           transparent: true,
-          opacity: 0.7,
+          opacity: 0.92,
           side: THREE.DoubleSide,
           depthWrite: false,
+          depthTest: false,
         }),
       );
-    } else if (kinds < 0.75) {
-      // Dust mote
+      baseOpacity = 0.92;
+    } else if (kinds < 0.58) {
       mesh = new THREE.Mesh(
-        new THREE.SphereGeometry(0.12, 4, 4),
+        new THREE.SphereGeometry(0.32, 5, 5),
         new THREE.MeshBasicMaterial({
-          color: 0xddd0b0,
+          color: 0xfff2d8,
+          transparent: true,
+          opacity: 0.85,
+          depthWrite: false,
+          depthTest: false,
+        }),
+      );
+      baseOpacity = 0.85;
+    } else if (kinds < 0.8) {
+      mesh = new THREE.Mesh(
+        new THREE.BoxGeometry(0.75, 0.24, 0.14),
+        new THREE.MeshBasicMaterial({
+          color: 0xb0bcc8,
+          transparent: true,
+          opacity: 0.9,
+          depthWrite: false,
+          depthTest: false,
+        }),
+      );
+      baseOpacity = 0.9;
+    } else {
+      // Long streak reads as wind direction
+      mesh = new THREE.Mesh(
+        new THREE.BoxGeometry(2.2 + Math.random(), 0.1, 0.08),
+        new THREE.MeshBasicMaterial({
+          color: 0xffffff,
           transparent: true,
           opacity: 0.55,
           depthWrite: false,
+          depthTest: false,
         }),
       );
-    } else {
-      // Scrap flake
-      mesh = new THREE.Mesh(
-        new THREE.BoxGeometry(0.35, 0.12, 0.08),
-        new THREE.MeshBasicMaterial({
-          color: 0x889099,
-          transparent: true,
-          opacity: 0.65,
-          depthWrite: false,
-        }),
-      );
+      baseOpacity = 0.55;
     }
+    mesh.renderOrder = 12;
 
     const x = scatter
       ? Math.random() * this.mapWidth
       : dir > 0
-        ? -5
-        : this.mapWidth + 5;
+        ? -10
+        : this.mapWidth + 10;
     mesh.position.set(
       x,
-      8 + Math.random() * this.mapHeight * 0.75,
-      this.midZ + (Math.random() - 0.5) * 8,
+      14 + Math.random() * this.mapHeight * 0.65,
+      this.midZ + (Math.random() - 0.5) * 12,
     );
     this.debrisGroup.add(mesh);
     this.debris.push({
       mesh,
-      vx: dir * (0.7 + Math.random() * 0.6),
-      vy: (Math.random() - 0.5) * 1.2,
-      life: 3 + Math.random() * 5,
-      maxLife: 4 + Math.random() * 4,
+      vx: dir * (0.9 + Math.random() * 0.5),
+      vy: (Math.random() - 0.5) * 1.5,
+      life: 4 + Math.random() * 6,
+      maxLife: 5 + Math.random() * 5,
+      baseOpacity,
     });
   }
 

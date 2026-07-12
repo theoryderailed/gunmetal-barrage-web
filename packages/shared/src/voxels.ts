@@ -80,8 +80,20 @@ export class VoxelWorld {
   }
 
   /**
+   * Highest *walkable* solid (ignores Bedrock).
+   * Bedrock is the kill floor — standing only on it means void death.
+   */
+  surfaceYWalkable(x: number, z: number): number {
+    for (let y = this.height - 1; y >= 0; y--) {
+      const m = this.get(x, y, z);
+      if (isSolid(m) && m !== VoxelMaterial.Bedrock) return y;
+    }
+    return -1;
+  }
+
+  /**
    * Continuous surface height (top of solid) with horizontal lerp between columns.
-   * Returns the Y a tank should rest at, or -1 if no ground.
+   * Returns the Y a tank should rest at, or -1 if no walkable ground (void / bedrock only).
    */
   sampleGroundY(x: number, z: number, hover = 1.05): number {
     const z0 = Math.max(0, Math.min(this.depth - 1, Math.floor(z)));
@@ -99,18 +111,28 @@ export class VoxelWorld {
     return top + (hover - 1); // hover 1.05 → sit just above top face
   }
 
+  /** True when only bedrock (or air) remains — tank would fall to the void. */
+  isVoidColumn(x: number, z: number): boolean {
+    const z0 = Math.max(0, Math.min(this.depth - 1, Math.floor(z)));
+    const x0 = Math.floor(x);
+    return (
+      this.surfaceYWalkable(x0, z0) < 0 &&
+      this.surfaceYWalkable(x0 + 1, z0) < 0
+    );
+  }
+
   /** Surface at z, or nearest non-empty Z column (for robust 2.5D footing). */
   private surfaceYPrefer(x: number, z: number): number {
     if (x < 0 || x >= this.width) return -1;
-    const primary = this.surfaceY(x, z);
+    const primary = this.surfaceYWalkable(x, z);
     if (primary >= 0) return primary;
     for (let d = 1; d <= 3; d++) {
       if (z - d >= 0) {
-        const h = this.surfaceY(x, z - d);
+        const h = this.surfaceYWalkable(x, z - d);
         if (h >= 0) return h;
       }
       if (z + d < this.depth) {
-        const h = this.surfaceY(x, z + d);
+        const h = this.surfaceYWalkable(x, z + d);
         if (h >= 0) return h;
       }
     }

@@ -52,8 +52,13 @@ export function moveAlongTerrain(
     }
 
     const ground = world.sampleGroundY(nx, z);
+    // Void / bedrock-only column: allow stepping on, tank will fall (caller kills)
     if (ground < 0) {
-      blocked = true;
+      cx = nx;
+      cy = -2;
+      traveled += step;
+      remaining = 0;
+      blocked = false;
       break;
     }
 

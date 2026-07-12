@@ -254,9 +254,24 @@ export class MatchSimulation {
     }
   }
 
-  snapToGround(p: PlayerState): void {
+  /**
+   * Snap tank to walkable surface. Returns true if the tank fell into the void
+   * (bedrock-only / no ground) and should be eliminated.
+   */
+  snapToGround(p: PlayerState): boolean {
     const ground = this.world.sampleGroundY(p.x, this.midZ);
-    if (ground >= 0) p.y = ground;
+    if (ground < 0 || this.world.isVoidColumn(p.x, this.midZ)) {
+      // Drop through the kill floor
+      p.y = -2;
+      return true;
+    }
+    p.y = ground;
+    // Standing on the absolute bottom strip is also lethal (dug down to bedrock)
+    if (ground <= 1.2) {
+      p.y = -2;
+      return true;
+    }
+    return false;
   }
 
   /**
@@ -299,6 +314,17 @@ export class MatchSimulation {
       p.x = result.x;
       p.y = result.y;
       p.facing = dir > 0 ? 1 : -1;
+    }
+
+    // Walked into a dig-through void / bedrock floor
+    if (this.snapToGround(p)) {
+      this.eliminate(
+        playerId,
+        p.lastAttackerId && p.lastAttackerId !== playerId
+          ? p.lastAttackerId
+          : null,
+        "fall",
+      );
     }
 
     return p;
@@ -457,11 +483,23 @@ export class MatchSimulation {
       }
     }
 
-    // Fall damage after terrain change — credit last attacker (crater kills)
+    // Fall damage / void death after terrain change — credit last attacker
     for (const t of this.players.values()) {
       if (!t.alive) continue;
       const beforeY = t.y;
-      this.snapToGround(t);
+      const voided = this.snapToGround(t);
+      if (voided) {
+        const killer =
+          t.lastAttackerId && t.lastAttackerId !== t.id
+            ? t.lastAttackerId
+            : p.id !== t.id
+              ? p.id
+              : null;
+        if (this.eliminate(t.id, killer, "fall")) {
+          eliminated.push(t.id);
+        }
+        continue;
+      }
       const fall = beforeY - t.y;
       if (fall > 4) {
         const fd = Math.floor((fall - 4) * 8);

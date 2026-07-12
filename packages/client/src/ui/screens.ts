@@ -382,6 +382,7 @@ export function renderHud(
     weaponIndex?: number;
     weaponCount?: number;
     mapName?: string;
+    spectating?: boolean;
   },
 ): void {
   const me = opts.players.find((p) => p.id === opts.meId);
@@ -399,10 +400,13 @@ export function renderHud(
     : urgent
       ? "timer urgent"
       : "timer";
+  const amDead = !!me && !me.alive && !opts.sandbox;
+  const spectating = !!opts.spectating || amDead;
   const canAct =
     (opts.sandbox || isMyTurn) &&
     opts.phase !== "resolving" &&
-    !!me?.alive;
+    !!me?.alive &&
+    !spectating;
   const phaseLabel =
     opts.phase === "resolving"
       ? "SHELL IN FLIGHT"
@@ -473,7 +477,7 @@ export function renderHud(
             <div class="timer-bar"><i style="width:${tPct}%"></i></div>
           </div>
           ${
-            isMyTurn && !opts.sandbox
+            isMyTurn && !opts.sandbox && !spectating
               ? `<button type="button" class="btn-pass" id="btn-pass">Pass (P)</button>`
               : ""
           }
@@ -501,6 +505,17 @@ export function renderHud(
         </div>
       </div>
       <div class="hud-bottom">
+        ${
+          spectating
+            ? `<div class="hud-box spectate-box">
+                <strong>SPECTATING</strong>
+                <p class="spectate-copy">You're out — watch the rest of the match or leave.</p>
+                <div class="spectate-actions">
+                  <button type="button" class="btn-wide good" id="btn-spectate-stay">Keep watching</button>
+                  <button type="button" class="secondary" id="btn-spectate-leave">Leave match</button>
+                </div>
+              </div>`
+            : `
         <div class="hud-box">
           <strong>${escapeHtml(me?.loadout?.name ?? "Tank")}</strong>
           HP
@@ -525,7 +540,8 @@ export function renderHud(
           <span class="muted">A/D move · W/S angle · F flip${
             opts.sandbox ? " · Esc menu" : " · P pass"
           }</span>
-        </div>
+        </div>`
+        }
       </div>
     </div>
   `;

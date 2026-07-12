@@ -81,6 +81,8 @@ let ready = false;
 /** Three tanks offered in lobby character select */
 let myLoadoutChoices: Loadout[] = [];
 let mySelectedLoadoutIndex = 0;
+/** Dead but still in room watching */
+let spectating = false;
 let players: PlayerState[] = [];
 let wind = 0;
 let currentPlayerId: string | null = null;
@@ -160,7 +162,10 @@ function resolveImpact(): void {
     if (p) {
       p.alive = false;
       p.hp = 0;
-      showToast(`${p.name} eliminated!`);
+      if (e.id === myId) {
+        showMatchToast("You're out — spectate or leave", 3200);
+        spectating = true;
+      }
     }
   }
 
@@ -211,6 +216,7 @@ const net = new GameClient({
   onMatchStarted: (data) => {
     stopAmbientDemo();
     mode = "playing";
+    spectating = false;
     players = data.players.map((p) => ({
       ...p,
       // Full fuel at match start (matches server turn refill)
@@ -362,7 +368,10 @@ const net = new GameClient({
     if (p) {
       p.alive = false;
       p.hp = 0;
-      showToast(`${p.name} eliminated!`);
+      if (data.id === myId) {
+        showMatchToast("You're out — spectate or leave", 3200);
+        spectating = true;
+      }
     }
     renderer.syncPlayers(players);
   },
@@ -836,9 +845,21 @@ function makePlayer(
   };
 }
 
+/**
+ * Combat feed toasts (Fired X, damage, etc.) are intentionally suppressed
+ * during matches — they cluttered the top of the screen. Turn banners stay.
+ * Menu / lobby / results still use brief toasts.
+ */
 function showToast(msg: string): void {
+  if (mode === "playing" || mode === "sandbox") return;
   toast = msg;
   toastTimer = performance.now() + 2200;
+}
+
+/** Force a toast even in-match (rare: elimination, spectate prompts). */
+function showMatchToast(msg: string, ms = 2200): void {
+  toast = msg;
+  toastTimer = performance.now() + ms;
 }
 
 function showBanner(msg: string, ms = 1500): void {
@@ -1306,6 +1327,9 @@ function loop(): void {
 
     if (now - lastHud > 100) {
       lastHud = now;
+      const me = players.find((p) => p.id === myId);
+      const amDead = mode === "playing" && !!me && !me.alive;
+      if (amDead) spectating = true;
       const tLeft =
         mode === "sandbox"
           ? 99
@@ -1322,6 +1346,7 @@ function loop(): void {
         weaponIndex: sandboxWeaponIndex,
         weaponCount: allWeapons().length,
         mapName: renderer.getMapName(),
+        spectating: amDead || spectating,
       });
     }
   } else {
@@ -1336,7 +1361,15 @@ function loop(): void {
 uiRoot.addEventListener("pointerdown", (e) => {
   const t = e.target as HTMLElement | null;
   if (!t?.closest) return;
-  if (t.closest("#btn-pass")) {
+  if (t.closest("#btn-spectate-leave")) {
+    e.preventDefault();
+    net.leave();
+    spectating = false;
+    void showMenu();
+  } else if (t.closest("#btn-spectate-stay")) {
+    e.preventDefault();
+    showMatchToast("Spectating…", 1600);
+  } else if (t.closest("#btn-pass")) {
     e.preventDefault();
     passTurn();
   } else if (t.closest("#btn-fire-alt")) {

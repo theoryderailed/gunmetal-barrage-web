@@ -146,6 +146,21 @@ export class MatchRoom extends Room {
           fuel: p.fuel,
           facing: p.facing,
         });
+        if (!p.alive) {
+          this.broadcast(ServerMsg.PlayerEliminated, {
+            id: p.id,
+            reason: "fall",
+          });
+          this.broadcastState();
+          const alive = this.sim.getPlayerList().filter((x) => x.alive);
+          if (alive.length <= 1) {
+            this.finishMatch();
+            return;
+          }
+          if (this.sim.currentPlayerId() === client.sessionId) {
+            this.endTurn();
+          }
+        }
       }
     });
 
