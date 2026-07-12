@@ -50,15 +50,16 @@ export const CHASSIS_POOL: ChassisDef[] = [
 ];
 
 /**
- * Primary weapon catalog (sandbox keys 1–7). Mini Nuke is a secondary special.
+ * Primary weapon catalog (sandbox keys 1–7).
+ * Peashooter is backup-only (never a kit primary). Mini Nuke is always the alt.
  */
 export const WEAPON_POOL: WeaponDef[] = [
   {
     id: "peashooter",
     name: "Peashooter",
-    summary: "Basic single shell. Baseline for aim / wind tests.",
-    howToTest: "Hit dummy with one crater. No multi-blast. No bounce.",
-    cost: 80,
+    summary: "Infinite backup when primary ammo is spent. Not a kit primary.",
+    howToTest: "Empty a primary's ammo, then Space fires Peashooter automatically.",
+    cost: 0,
     damage: 28,
     blastRadius: 3.6,
     projectileCount: 1,
@@ -66,8 +67,9 @@ export const WEAPON_POOL: WeaponDef[] = [
     behavior: "single",
     maxAmmo: 99,
     powerMultiplier: 1.0,
-    weight: 5,
+    weight: 0,
     color: 0xffdd44,
+    backupOnly: true,
   },
   {
     id: "howitzer",
@@ -166,17 +168,34 @@ export const WEAPON_POOL: WeaponDef[] = [
     weight: 3,
     color: 0xffff00,
   },
+  {
+    id: "dust_devil",
+    name: "Dust Devil",
+    summary: "Twister flings tanks up/sideways; bodies smash into terrain (dig + damage).",
+    howToTest: "Near tanks: whirl VFX, random toss; walls stop them and carve a smash crater.",
+    cost: 250,
+    damage: 34,
+    // Used for throw range, not crater size (terrain dig is tiny by design)
+    blastRadius: 5.2,
+    projectileCount: 1,
+    trajectory: "lob",
+    behavior: "tornado",
+    maxAmmo: 5,
+    powerMultiplier: 0.95,
+    weight: 3,
+    color: 0xc8b070,
+  },
 ];
 
 /**
- * One-shot (or very limited) alternate weapons — only roll as secondary.
+ * One-shot alt — always equipped as secondary on generated kits.
  */
 export const SECONDARY_SPECIALS: WeaponDef[] = [
   {
     id: "nuke_lite",
     name: "Mini Nuke",
     summary: "Once-per-match panic button. Huge lob blast — use carefully.",
-    howToTest: "Equip as alt (R). One shot only. Massive crater + self-splash risk.",
+    howToTest: "Every kit has this as alt (R). One shot only. Massive crater + self-splash risk.",
     cost: 160,
     damage: 70,
     blastRadius: 6.8,
@@ -190,6 +209,15 @@ export const SECONDARY_SPECIALS: WeaponDef[] = [
     secondaryOnly: true,
   },
 ];
+
+export function getMiniNuke(): WeaponDef {
+  return { ...SECONDARY_SPECIALS[0]! };
+}
+
+/** Weapons that can roll as kit primaries (excludes Peashooter backup). */
+export function primaryWeaponPool(): WeaponDef[] {
+  return WEAPON_POOL.filter((w) => !w.secondaryOnly && !w.backupOnly);
+}
 
 /** Primaries + specials (sandbox catalog). */
 export function allWeapons(): WeaponDef[] {
@@ -255,6 +283,8 @@ export function formatWeaponBehavior(w: WeaponDef): string {
       return "3 tight shells → 3 nearby blasts";
     case "homing":
       return "1 rocket → steers toward nearest enemy";
+    case "tornado":
+      return "1 shell → twister flings tanks (almost no dig)";
     case "special":
       return "ALT only · 1 shot per match · huge blast";
     default:
@@ -280,7 +310,8 @@ export function makeTestLoadout(weapon: WeaponDef, budget = 1000): Loadout {
 
 /**
  * Generate a tank + weapons loadout within budget. Deterministic for seed.
- * Primary = regular pool. Secondary = often a one-shot special (Mini Nuke) or alt gun.
+ * Primary = combat gun (never Peashooter). Secondary = always Mini Nuke ×1.
+ * Peashooter is only swapped in when primary ammo hits 0.
  */
 export function generateLoadout(
   seed: number,
@@ -293,10 +324,15 @@ export function generateLoadout(
   },
 ): Loadout {
   const rng = createRng(seed);
+  const miniNuke = getMiniNuke();
+  const primaries = primaryWeaponPool();
+  const cheapestPrimary = Math.min(...primaries.map((w) => w.cost));
+  // Always leave room for Mini Nuke + at least one real primary
+  const kitFloor = cheapestPrimary + miniNuke.cost;
 
-  const chassisCandidates = CHASSIS_POOL.filter((c) => c.cost + 80 <= budget).map(
-    (c) => ({ ...c, weight: c.weight }),
-  );
+  const chassisCandidates = CHASSIS_POOL.filter(
+    (c) => c.cost + kitFloor <= budget,
+  ).map((c) => ({ ...c, weight: c.weight }));
   let chassis =
     chassisCandidates.length > 0
       ? pickWeighted(rng, chassisCandidates)
@@ -307,11 +343,12 @@ export function generateLoadout(
     if (forced) chassis = forced;
   }
 
-  let remaining = budget - chassis.cost;
+  // Reserve Mini Nuke so primary pick never steals the alt slot budget
+  let remaining = budget - chassis.cost - miniNuke.cost;
 
-  let primaryCandidates = WEAPON_POOL.filter(
-    (w) => !w.secondaryOnly && w.cost <= remaining,
-  ).map((w) => ({ ...w, weight: w.weight }));
+  let primaryCandidates = primaries
+    .filter((w) => w.cost <= remaining)
+    .map((w) => ({ ...w, weight: w.weight }));
 
   if (opts?.preferPrimaryIds?.length) {
     const preferred = primaryCandidates.filter((w) =>
@@ -320,34 +357,12 @@ export function generateLoadout(
     if (preferred.length > 0) primaryCandidates = preferred;
   }
 
+  // Never fall back to Peashooter as a kit primary
   const primary =
     primaryCandidates.length > 0
       ? pickWeighted(rng, primaryCandidates)
-      : WEAPON_POOL[0]!;
+      : primaries.reduce((a, b) => (a.cost <= b.cost ? a : b));
   remaining -= primary.cost;
-
-  let secondary: WeaponDef | null = null;
-  if (remaining >= 80 && rng() > 0.22) {
-    const specials = SECONDARY_SPECIALS.filter((w) => w.cost <= remaining).map(
-      (w) => ({ ...w, weight: w.weight }),
-    );
-    // Bias toward one-shot specials when they fit (~60% of secondary rolls)
-    if (specials.length > 0 && rng() < 0.6) {
-      secondary = pickWeighted(rng, specials);
-      remaining -= secondary.cost;
-    } else {
-      const secCandidates = WEAPON_POOL.filter(
-        (w) => !w.secondaryOnly && w.cost <= remaining && w.id !== primary.id,
-      ).map((w) => ({ ...w, weight: w.weight }));
-      if (secCandidates.length > 0) {
-        secondary = pickWeighted(rng, secCandidates);
-        remaining -= secondary.cost;
-      } else if (specials.length > 0) {
-        secondary = pickWeighted(rng, specials);
-        remaining -= secondary.cost;
-      }
-    }
-  }
 
   const palette: [number, number, number] = [
     0.2 + rng() * 0.7,
@@ -363,7 +378,7 @@ export function generateLoadout(
     spent: budget - remaining,
     chassis: { ...chassis },
     primary: { ...primary },
-    secondary: secondary ? { ...secondary } : null,
+    secondary: miniNuke,
     palette,
     name,
   };
@@ -377,6 +392,10 @@ export function generateLoadoutChoices(
   budget: number,
   count = 3,
 ): Loadout[] {
+  const miniNuke = getMiniNuke();
+  const kitFloor =
+    Math.min(...primaryWeaponPool().map((w) => w.cost)) + miniNuke.cost;
+
   const archetypes: {
     preferChassisId: string;
     preferPrimaryIds: string[];
@@ -384,17 +403,17 @@ export function generateLoadoutChoices(
   }[] = [
     {
       preferChassisId: "scout",
-      preferPrimaryIds: ["peashooter", "heat_seeker", "ricochet", "triple"],
+      preferPrimaryIds: ["heat_seeker", "ricochet", "triple", "dust_devil"],
       label: "Scout",
     },
     {
       preferChassisId: "standard",
-      preferPrimaryIds: ["howitzer", "scatter", "triple", "heat_seeker"],
+      preferPrimaryIds: ["howitzer", "scatter", "triple", "dust_devil"],
       label: "Balanced",
     },
     {
       preferChassisId: "heavy",
-      preferPrimaryIds: ["bunker_buster", "howitzer", "scatter", "ricochet"],
+      preferPrimaryIds: ["bunker_buster", "howitzer", "scatter", "dust_devil"],
       label: "Heavy",
     },
   ];
@@ -405,12 +424,13 @@ export function generateLoadoutChoices(
     // Fall back if heavy too expensive
     let chassisId = arch.preferChassisId;
     const chassis = CHASSIS_POOL.find((c) => c.id === chassisId);
-    if (!chassis || chassis.cost + 80 > budget) {
+    if (!chassis || chassis.cost + kitFloor > budget) {
       chassisId = "standard";
     }
     if (
       chassisId === "standard" &&
-      (CHASSIS_POOL.find((c) => c.id === "standard")?.cost ?? 999) + 80 > budget
+      (CHASSIS_POOL.find((c) => c.id === "standard")?.cost ?? 999) + kitFloor >
+        budget
     ) {
       chassisId = "scout";
     }

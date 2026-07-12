@@ -12,10 +12,13 @@ import {
   getWeaponByIndex,
   hashSeed,
   makeTestLoadout,
+  pickRandomValidSpawns,
   fuelCostPerUnit,
   moveAlongTerrain,
   moveSpeed,
   blastsToTerrainOps,
+  isTornadoWeapon,
+  resolveTornadoThrows,
   resolveBlastDamage,
   simulateWeaponFire,
   type Loadout,
@@ -92,8 +95,10 @@ let toast = "";
 let toastTimer = 0;
 let rankings: MatchResultEntry[] = [];
 let myId: string | null = null;
-/** Sandbox catalog index into WEAPON_POOL (1–7 keys). */
+/** Sandbox catalog index into weapon list (1–8 keys). */
 let sandboxWeaponIndex = 0;
+/** Spawn pads for sandbox respawn. */
+let sandboxSpawns: { x: number; y: number }[] = [];
 let turnTimeMax = 30;
 let banner = "";
 let bannerUntil = 0;
@@ -742,13 +747,17 @@ function startSandbox(): void {
   enemyLo.name = `${dummyId.displayName}'s Standard`;
   const sp0 = map.spawns[0] ?? { x: 24, y: 40 };
   const sp1 = map.spawns[1] ?? { x: 120, y: 40 };
+  sandboxSpawns = [
+    { x: sp0.x + 0.5, y: sp0.y },
+    { x: sp1.x + 0.5, y: sp1.y },
+  ];
   players = [
-    makePlayer("local", displayName, loadout, sp0.x + 0.5, 1, false, null),
+    makePlayer("local", displayName, loadout, sandboxSpawns[0]!.x, 1, false, null),
     makePlayer(
       "dummy",
       dummyId.displayName,
       enemyLo,
-      sp1.x + 0.5,
+      sandboxSpawns[1]!.x,
       -1,
       true,
       dummyId,
@@ -772,7 +781,89 @@ function startSandbox(): void {
   renderer.syncPlayers(players);
   uiRoot.innerHTML = "";
   const w = getWeaponByIndex(sandboxWeaponIndex);
-  showToast(`Sandbox · ${w.name} · keys 1–7 switch weapons`);
+  // Unlimited shots in sandbox
+  for (const p of players) {
+    p.primaryAmmo = 99;
+    p.secondaryAmmo = 99;
+  }
+  showToast(`Sandbox · ${w.name} · ∞ ammo · keys 1–8 switch weapons`);
+}
+
+/** Revive tanks at random valid surface pads (full HP/fuel). */
+function respawnSandboxTanks(): void {
+  if (mode !== "sandbox") return;
+  const world = renderer.getWorld();
+  const midZ = renderer.getMidZ();
+
+  // Fresh random walkable pads on the *current* terrain (post-dig)
+  let pads =
+    world != null
+      ? pickRandomValidSpawns(
+          world,
+          Math.max(2, players.length),
+          (Date.now() ^ (Math.random() * 1e9)) >>> 0,
+          midZ,
+        )
+      : [];
+
+  // Fallback to original match spawns if the map is too chewed up
+  if (pads.length < players.length && sandboxSpawns.length > 0) {
+    const used = new Set(pads.map((p) => Math.floor(p.x)));
+    for (const sp of [...sandboxSpawns].sort(() => Math.random() - 0.5)) {
+      if (pads.length >= players.length) break;
+      if (used.has(Math.floor(sp.x))) continue;
+      const g =
+        world != null ? world.sampleGroundY(sp.x, midZ) : sp.y;
+      if (g < 0) continue;
+      pads.push({ x: sp.x, y: g });
+      used.add(Math.floor(sp.x));
+    }
+  }
+  if (pads.length === 0) {
+    pads = sandboxSpawns.length
+      ? sandboxSpawns.map((s) => ({ ...s }))
+      : [
+          { x: 24.5, y: 40 },
+          { x: 120.5, y: 40 },
+        ];
+  }
+
+  players.forEach((p, i) => {
+    const pad = pads[i % pads.length]!;
+    p.x = pad.x;
+    p.alive = true;
+    if (p.loadout) {
+      p.hp = p.loadout.chassis.maxHp;
+      p.fuel = p.loadout.chassis.fuel;
+    }
+    p.primaryAmmo = 99;
+    p.secondaryAmmo = 99;
+    p.power = DEFAULT_POWER;
+    p.angle = 45;
+    p.facing = i === 0 ? 1 : -1;
+    if (world) {
+      const g = world.sampleGroundY(p.x, midZ);
+      p.y = g >= 0 ? g : pad.y;
+    } else {
+      p.y = pad.y;
+    }
+  });
+
+  // Keep selected sandbox weapon on the player
+  const me = players.find((p) => p.id === myId);
+  if (me) {
+    const weapon = getWeaponByIndex(sandboxWeaponIndex);
+    me.loadout = makeTestLoadout(weapon);
+    me.hp = me.loadout.chassis.maxHp;
+    me.fuel = me.loadout.chassis.fuel;
+    me.primaryAmmo = 99;
+    me.secondaryAmmo = 99;
+  }
+
+  phase = "move";
+  currentPlayerId = myId;
+  renderer.syncPlayers(players, { hardSnap: true });
+  showToast("Tanks respawned (random pads)");
 }
 
 function equipSandboxWeapon(index: number): void {
@@ -786,8 +877,9 @@ function equipSandboxWeapon(index: number): void {
   me.loadout = makeTestLoadout(weapon);
   me.hp = me.loadout.chassis.maxHp;
   me.fuel = me.loadout.chassis.fuel;
-  me.primaryAmmo = weapon.id === "peashooter" ? 99 : weapon.maxAmmo;
-  me.secondaryAmmo = 0;
+  // Sandbox: unlimited ammo for every catalog weapon
+  me.primaryAmmo = 99;
+  me.secondaryAmmo = 99;
   me.alive = true;
   // Reset dummy HP so each weapon test is clean
   const dummy = players.find((p) => p.id === "dummy");
@@ -796,9 +888,8 @@ function equipSandboxWeapon(index: number): void {
     dummy.alive = true;
   }
   renderer.syncPlayers(players);
-  const note = weapon.secondaryOnly ? " (special · 1 shot)" : "";
   showToast(
-    `${sandboxWeaponIndex + 1}. ${weapon.name}${note} — ${formatWeaponBehavior(weapon)}`,
+    `${sandboxWeaponIndex + 1}. ${weapon.name} (∞) — ${formatWeaponBehavior(weapon)}`,
   );
 }
 
@@ -931,11 +1022,11 @@ function fireShot(slot: "primary" | "secondary" = "primary"): void {
       showToast("No alt weapon");
       return;
     }
-    if (me.secondaryAmmo <= 0) {
+    if (mode !== "sandbox" && me.secondaryAmmo <= 0) {
       showToast(`${me.loadout.secondary.name} spent — use Space (Peashooter)`);
       return;
     }
-  } else {
+  } else if (mode !== "sandbox") {
     // Primary empty → local Peashooter fallback (server does the same)
     if (me.primaryAmmo <= 0) {
       equipPeashooterFallback(me);
@@ -1058,20 +1149,22 @@ function applyLocalMove(
   const want = Math.min(speed * dt, maxDist);
   if (want <= 1e-4) return false;
 
-  const result = moveAlongTerrain(
-    world,
-    me.x,
-    me.y,
-    renderer.getMidZ(),
-    dir,
-    want,
-  );
+  const midZ = renderer.getMidZ();
+  const result = moveAlongTerrain(world, me.x, me.y, midZ, dir, want);
   if (result.traveled <= 0) return false;
 
   me.x = result.x;
   me.y = result.y;
   me.facing = dir;
   me.fuel = Math.max(0, me.fuel - costPer * result.traveled);
+
+  // Sandbox: walking off a dug-through island kills you (server handles multiplayer)
+  if (mode === "sandbox" && world.sampleGroundY(me.x, midZ) < 0) {
+    me.y = -6;
+    me.hp = 0;
+    me.alive = false;
+    showMatchToast("Fell into the void!", 2800);
+  }
   return true;
 }
 
@@ -1188,12 +1281,9 @@ function fireSandbox(
     showToast("No alt weapon");
     return;
   }
-  if (slot === "secondary" && me.secondaryAmmo <= 0) {
-    showToast(`${weapon.name} spent — use Space (Peashooter)`);
-    return;
-  }
   let fireWeapon = weapon;
-  if (slot === "primary") {
+  // Sandbox keeps the selected catalog gun forever (unlimited shots)
+  if (slot === "primary" && mode !== "sandbox") {
     if (me.primaryAmmo <= 0 || fireWeapon.id === "peashooter") {
       if (me.primaryAmmo <= 0) equipPeashooterFallback(me);
       fireWeapon = me.loadout.primary;
@@ -1218,7 +1308,10 @@ function fireSandbox(
   });
 
   renderer.hideTrajectory();
-  if (slot === "secondary") {
+  if (mode === "sandbox") {
+    me.primaryAmmo = 99;
+    me.secondaryAmmo = 99;
+  } else if (slot === "secondary") {
     me.secondaryAmmo = Math.max(0, me.secondaryAmmo - 1);
   } else if (fireWeapon.id !== "peashooter") {
     me.primaryAmmo = Math.max(0, me.primaryAmmo - 1);
@@ -1240,11 +1333,14 @@ function fireSandbox(
       }
 
       sfx.impact(fired.blasts.some((b) => b.radius >= 4.5));
-      // Same terrain stamps as the server (drill gets deep shaft + undercut)
-      renderer.applyTerrainOps(blastsToTerrainOps(fired.blasts, weapon), weapon);
+      // Same terrain stamps as the server (drill / dust devil funnels)
+      renderer.applyTerrainOps(
+        blastsToTerrainOps(fired.blasts, fireWeapon),
+        fireWeapon,
+      );
 
       const damageByTarget = resolveBlastDamage(
-        weapon,
+        fireWeapon,
         fired.blasts,
         players
           .filter((t) => t.alive)
@@ -1258,7 +1354,7 @@ function fireSandbox(
       );
 
       const hitSummary: string[] = [
-        `${weapon.name}: ${fired.blasts.length} blast${fired.blasts.length === 1 ? "" : "s"}`,
+        `${fireWeapon.name}: ${fired.blasts.length} blast${fired.blasts.length === 1 ? "" : "s"}`,
       ];
       for (const [targetId, dmg] of damageByTarget) {
         const t = players.find((p) => p.id === targetId);
@@ -1274,7 +1370,53 @@ function fireSandbox(
           t.id === me.id ? `you -${dmg}` : `${t.name} -${dmg}`,
         );
       }
-      if (damageByTarget.size === 0) {
+
+      // Dust Devil: ballistic toss with terrain collision digs
+      if (isTornadoWeapon(fireWeapon) && fired.blasts.length > 0) {
+        const { throws, terrainOps: tossDigs } = resolveTornadoThrows(
+          world,
+          fired.blasts,
+          players
+            .filter((t) => t.alive)
+            .map((t) => ({
+              id: t.id,
+              x: t.x,
+              y: t.y,
+              isShooter: t.id === me.id,
+            })),
+          midZ,
+          fireWeapon,
+        );
+        if (tossDigs.length > 0) {
+          renderer.applyTerrainOps(tossDigs, fireWeapon);
+        }
+        for (const toss of throws) {
+          const t = players.find((p) => p.id === toss.id);
+          if (!t || !t.alive) continue;
+          t.x = toss.x;
+          t.y = toss.y;
+          t.hp -= toss.tossDamage;
+          renderer.flashTank(t.id);
+          renderer.showDamageNumber(t.x, t.y + 1.2, midZ + 0.5, toss.tossDamage);
+          const who = t.id === me.id ? "you" : t.name;
+          const arrow = toss.dir > 0 ? "↗" : "↖";
+          const smash = toss.hitTerrain ? " 💥" : "";
+          hitSummary.push(
+            `${who} ${arrow}${toss.distance.toFixed(0)}↑${toss.loft.toFixed(0)}${smash}`,
+          );
+          if (toss.intoVoid || t.hp <= 0) {
+            t.hp = 0;
+            t.alive = false;
+            if (toss.intoVoid) {
+              hitSummary.push(
+                t.id === me.id ? "you fell through!" : `${t.name} fell through!`,
+              );
+            }
+          }
+        }
+      }
+
+      if (damageByTarget.size === 0 && !hitSummary.some((s) => s.includes("flung"))) {
         hitSummary.push("no tank damage");
       }
       showToast(hitSummary.join(" · "));
@@ -1282,12 +1424,24 @@ function fireSandbox(
       for (const t of players) {
         if (!t.alive) continue;
         const g = world.sampleGroundY(t.x, midZ);
-        if (g >= 0) t.y = g;
+        if (g < 0) {
+          // Dug through the floating island — fall into open sky
+          t.y = -6;
+          t.hp = 0;
+          t.alive = false;
+          if (t.id === me.id) {
+            showMatchToast("Fell into the void!", 2800);
+          } else {
+            showToast(`${t.name} fell through!`);
+          }
+        } else {
+          t.y = g;
+        }
       }
       renderer.syncPlayers(players);
     },
-    weapon.color ?? 0xff5522,
-    weapon,
+    fireWeapon.color ?? 0xff5522,
+    fireWeapon,
     fired.paths,
   );
 }
@@ -1384,6 +1538,9 @@ uiRoot.addEventListener("pointerdown", (e) => {
   } else if (t.closest("#btn-power-down")) {
     e.preventDefault();
     adjustPower(-5);
+  } else if (t.closest("#btn-sandbox-respawn")) {
+    e.preventDefault();
+    respawnSandboxTanks();
   }
 });
 

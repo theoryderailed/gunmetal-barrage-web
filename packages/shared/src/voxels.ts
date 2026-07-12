@@ -26,10 +26,8 @@ export function isSolid(mat: number): boolean {
 }
 
 export function isDestructible(mat: number): boolean {
-  return (
-    mat !== VoxelMaterial.Air &&
-    mat !== VoxelMaterial.Bedrock
-  );
+  // Floating islands: every solid is diggable so a deep enough blast opens sky below.
+  return mat !== VoxelMaterial.Air;
 }
 
 /** Flat voxel grid: index = x + z * width + y * width * depth */
@@ -71,8 +69,9 @@ export class VoxelWorld {
     this.data[this.index(x, y, z)] = mat;
   }
 
-  /** Highest solid Y at (x, z), or -1 if empty column. */
+  /** Highest solid Y at (x, z), or -1 if empty column (open sky). */
   surfaceY(x: number, z: number): number {
+    if (x < 0 || x >= this.width || z < 0 || z >= this.depth) return -1;
     for (let y = this.height - 1; y >= 0; y--) {
       if (isSolid(this.get(x, y, z))) return y;
     }
@@ -80,30 +79,34 @@ export class VoxelWorld {
   }
 
   /**
-   * Highest *walkable* solid (ignores Bedrock).
-   * Bedrock is the kill floor — standing only on it means void death.
+   * Highest walkable solid. Maps are floating islands — any remaining solid
+   * counts (bedrock is no longer a special floor). Empty column = void.
    */
   surfaceYWalkable(x: number, z: number): number {
-    for (let y = this.height - 1; y >= 0; y--) {
-      const m = this.get(x, y, z);
-      if (isSolid(m) && m !== VoxelMaterial.Bedrock) return y;
-    }
-    return -1;
+    return this.surfaceY(x, z);
   }
 
   /**
-   * Continuous surface height (top of solid) with horizontal lerp between columns.
-   * Returns the Y a tank should rest at, or -1 if no walkable ground (void / bedrock only).
+   * Continuous surface height for tanks on the play plane.
+   * Returns -1 when the island underfoot is gone (fall into open sky).
+   *
+   * Uses the mid-Z play plane only (full-depth digs keep depths consistent).
+   * A hole under either supporting column drops you if you're mostly over it.
    */
   sampleGroundY(x: number, z: number, hover = 1.05): number {
     const z0 = Math.max(0, Math.min(this.depth - 1, Math.floor(z)));
     const x0 = Math.floor(x);
     const fx = x - x0; // 0..1 across column
-    // Prefer play-plane surface; if that column is empty, scan nearby Z so a
-    // rare partial column doesn't leave the tank floating/stuck.
-    const h0 = this.surfaceYPrefer(x0, z0);
-    const h1 = this.surfaceYPrefer(x0 + 1, z0);
+    const h0 = this.surfaceY(x0, z0);
+    const h1 = this.surfaceY(x0 + 1, z0);
+
+    // Fully open sky under the footprint
     if (h0 < 0 && h1 < 0) return -1;
+
+    // Mostly over a void column → fall through the island
+    if (h0 < 0 && fx < 0.55) return -1;
+    if (h1 < 0 && fx > 0.45) return -1;
+
     const left = h0 < 0 ? h1 : h0;
     const right = h1 < 0 ? h0 : h1;
     // surfaceY is voxel index of top solid; top face is at y+1
@@ -111,32 +114,11 @@ export class VoxelWorld {
     return top + (hover - 1); // hover 1.05 → sit just above top face
   }
 
-  /** True when only bedrock (or air) remains — tank would fall to the void. */
+  /** True when no solid remains under this X on the play plane (void / open sky). */
   isVoidColumn(x: number, z: number): boolean {
     const z0 = Math.max(0, Math.min(this.depth - 1, Math.floor(z)));
     const x0 = Math.floor(x);
-    return (
-      this.surfaceYWalkable(x0, z0) < 0 &&
-      this.surfaceYWalkable(x0 + 1, z0) < 0
-    );
-  }
-
-  /** Surface at z, or nearest non-empty Z column (for robust 2.5D footing). */
-  private surfaceYPrefer(x: number, z: number): number {
-    if (x < 0 || x >= this.width) return -1;
-    const primary = this.surfaceYWalkable(x, z);
-    if (primary >= 0) return primary;
-    for (let d = 1; d <= 3; d++) {
-      if (z - d >= 0) {
-        const h = this.surfaceYWalkable(x, z - d);
-        if (h >= 0) return h;
-      }
-      if (z + d < this.depth) {
-        const h = this.surfaceYWalkable(x, z + d);
-        if (h >= 0) return h;
-      }
-    }
-    return -1;
+    return this.surfaceY(x0, z0) < 0 && this.surfaceY(x0 + 1, z0) < 0;
   }
 
   /**

@@ -52,10 +52,10 @@ export function moveAlongTerrain(
     }
 
     const ground = world.sampleGroundY(nx, z);
-    // Void / bedrock-only column: allow stepping on, tank will fall (caller kills)
+    // Open sky underfoot (dug through floating island): step in and fall
     if (ground < 0) {
       cx = nx;
-      cy = -2;
+      cy = -4;
       traveled += step;
       remaining = 0;
       blocked = false;
@@ -63,19 +63,13 @@ export function moveAlongTerrain(
     }
 
     const rise = ground - cy;
-    // Gentle slopes: normal climb budget
-    // After blasts, crater lips are steeper — allow short step-ups so tanks
-    // don't get permanently trapped by a 1–2 voxel ledge between depths/columns.
-    const softStep = maxClimb * step + 0.35;
-    if (rise > softStep) {
-      if (rise <= 2.25) {
-        // Step onto the ledge over one frame
-        cx = nx;
-        cy = ground;
-        traveled += step;
-        remaining -= step;
-        continue;
-      }
+    // Climb limit: smooth slopes follow maxClimb/unit; absolute max is ~1 voxel
+    // so tanks cannot leap onto 2-high neighboring pillars.
+    // (Old code allowed free 2.25-unit step-ups which felt like jumps.)
+    const slopeBudget = maxClimb * step + 0.28;
+    const maxStepHeight = 1.05;
+    const maxRise = Math.min(maxStepHeight, Math.max(slopeBudget, 0.95));
+    if (rise > maxRise) {
       blocked = true;
       break;
     }
