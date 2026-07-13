@@ -25,8 +25,18 @@ export function renderMenu(
       maxPlayers: number;
     }[];
     onJoinRoom: (id: string) => void;
+    /** Audio mute */
+    muted: boolean;
+    onMuteChange: (muted: boolean) => void;
+    /** Bot skill for new matches */
+    botDifficulty: "easy" | "normal" | "hard";
+    onBotDifficulty: (d: "easy" | "normal" | "hard") => void;
+    /** Resume mid-match if we still have a room id */
+    resumeRoomId?: string | null;
+    onResumeMatch?: () => void;
   },
 ): void {
+  const diff = opts.botDifficulty;
   root.innerHTML = `
     <div class="screen live-bg">
       <div class="panel live-panel menu-panel">
@@ -61,6 +71,11 @@ export function renderMenu(
                 <button id="btn-private" class="secondary">Private</button>
                 <button id="btn-sandbox" class="secondary">Sandbox</button>
               </div>
+              ${
+                opts.resumeRoomId && opts.onResumeMatch
+                  ? `<button id="btn-resume" class="btn-wide btn-resume" type="button">Resume last match</button>`
+                  : ""
+              }
             </div>
           </section>
 
@@ -69,6 +84,24 @@ export function renderMenu(
             <div class="join-code-form">
               <input id="join-code" type="text" maxlength="8" placeholder="ABCD12" spellcheck="false" />
               <button id="btn-join-code" class="secondary">Join</button>
+            </div>
+          </section>
+
+          <section class="menu-card menu-card-settings">
+            <h3 class="menu-card-title">Settings</h3>
+            <div class="settings-row">
+              <label class="settings-toggle">
+                <input type="checkbox" id="chk-mute" ${opts.muted ? "checked" : ""} />
+                <span>Mute sound</span>
+              </label>
+            </div>
+            <div class="settings-row">
+              <span class="settings-label">Bot difficulty</span>
+              <div class="diff-pills" role="group" aria-label="Bot difficulty">
+                <button type="button" class="diff-pill ${diff === "easy" ? "active" : ""}" data-diff="easy">Easy</button>
+                <button type="button" class="diff-pill ${diff === "normal" ? "active" : ""}" data-diff="normal">Normal</button>
+                <button type="button" class="diff-pill ${diff === "hard" ? "active" : ""}" data-diff="hard">Hard</button>
+              </div>
             </div>
           </section>
 
@@ -106,7 +139,7 @@ export function renderMenu(
         </div>
 
         <footer class="menu-footer">
-          <span>Q/E power · Space fire · A/D move · W/S angle</span>
+          <span>Q/E power · Space fire · A/D move · W/S angle · M mute</span>
         </footer>
       </div>
     </div>
@@ -120,6 +153,18 @@ export function renderMenu(
   root.querySelector("#btn-sandbox")?.addEventListener("click", opts.onSandbox);
   root.querySelector("#btn-refresh")?.addEventListener("click", opts.onRefreshRooms);
   root.querySelector("#btn-lb")?.addEventListener("click", opts.onShowLeaderboard);
+  root.querySelector("#btn-resume")?.addEventListener("click", () => {
+    opts.onResumeMatch?.();
+  });
+  root.querySelector("#chk-mute")?.addEventListener("change", (e) => {
+    opts.onMuteChange((e.target as HTMLInputElement).checked);
+  });
+  root.querySelectorAll("[data-diff]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const d = (btn as HTMLElement).dataset.diff as "easy" | "normal" | "hard";
+      opts.onBotDifficulty(d);
+    });
+  });
   root.querySelector("#btn-join-code")?.addEventListener("click", () => {
     const code = (root.querySelector("#join-code") as HTMLInputElement).value;
     opts.onJoinCode(code);

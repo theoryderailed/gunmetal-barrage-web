@@ -28,6 +28,9 @@ interface CreateOptions {
   budget?: number;
   fillBots?: boolean;
   displayName?: string;
+  /** Stable id from prior session for mid-match reconnect */
+  playerId?: string;
+  botDifficulty?: "easy" | "normal" | "hard";
 }
 
 interface ClientData {
@@ -35,6 +38,8 @@ interface ClientData {
   ready: boolean;
   loadoutChoices: Loadout[];
   selectedLoadoutIndex: number;
+  /** Stable across reconnects */
+  playerId: string;
 }
 
 interface PendingBot {
@@ -59,15 +64,22 @@ export class MatchRoom extends Room {
   private pendingBots: PendingBot[] = [];
   /** Monotonic token so stale bot/turn callbacks never act after the turn advanced. */
   private turnEpoch = 0;
+  /** Forfeit timers for disconnected humans (playerId → timer) */
+  private forfeitTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   onCreate(options: CreateOptions): void {
     this.maxClients = options.maxPlayers ?? DEFAULT_MATCH_CONFIG.maxPlayers;
+    const diff = options.botDifficulty;
     this.config = {
       ...DEFAULT_MATCH_CONFIG,
       maxPlayers: options.maxPlayers ?? DEFAULT_MATCH_CONFIG.maxPlayers,
       budget: options.budget ?? DEFAULT_MATCH_CONFIG.budget,
       isPrivate: !!options.isPrivate,
       fillBots: options.fillBots !== false,
+      botDifficulty:
+        diff === "easy" || diff === "hard" || diff === "normal"
+          ? diff
+          : DEFAULT_MATCH_CONFIG.botDifficulty,
     };
     this.roomTitle = options.name?.slice(0, 40) || "Gun Metal Barrage";
     this.joinCode = randomBytes(3).toString("hex").toUpperCase();
@@ -136,8 +148,10 @@ export class MatchRoom extends Room {
 
     this.onMessage(ClientMsg.Move, (client, message: MovePayload) => {
       if (!this.sim || this.sim.status !== "playing") return;
+      const pid = this.playerIdFor(client);
+      if (!pid) return;
       const dt = typeof message.dt === "number" ? message.dt : 1 / 20;
-      const p = this.sim.tryMove(client.sessionId, message.dir, dt);
+      const p = this.sim.tryMove(pid, message.dir, dt);
       if (p) {
         this.broadcast(ServerMsg.PlayerMoved, {
           id: p.id,
@@ -157,7 +171,7 @@ export class MatchRoom extends Room {
             this.finishMatch();
             return;
           }
-          if (this.sim.currentPlayerId() === client.sessionId) {
+          if (this.sim.currentPlayerId() === pid) {
             this.endTurn();
           }
         }
@@ -166,8 +180,10 @@ export class MatchRoom extends Room {
 
     this.onMessage(ClientMsg.Aim, (client, message: AimPayload) => {
       if (!this.sim || this.sim.status !== "playing") return;
+      const pid = this.playerIdFor(client);
+      if (!pid) return;
       const p = this.sim.setAim(
-        client.sessionId,
+        pid,
         message.angle,
         message.power,
         message.facing,
@@ -183,12 +199,15 @@ export class MatchRoom extends Room {
     });
 
     this.onMessage(ClientMsg.Fire, (client, message: FirePayload) => {
-      this.handleFire(client.sessionId, message);
+      const pid = this.playerIdFor(client);
+      if (!pid) return;
+      this.handleFire(pid, message);
     });
 
     this.onMessage(ClientMsg.Pass, (client) => {
       if (!this.sim || this.sim.status !== "playing") return;
-      if (this.sim.currentPlayerId() !== client.sessionId) return;
+      const pid = this.playerIdFor(client);
+      if (!pid || this.sim.currentPlayerId() !== pid) return;
       // Don't pass mid-shell (would skip resolve / double-advance)
       if (this.sim.phase !== "move" && this.sim.phase !== "aim") return;
       this.endTurn();
@@ -199,48 +218,114 @@ export class MatchRoom extends Room {
   }
 
   onJoin(client: Client, options: CreateOptions): void {
-    if (!this.hostId) this.hostId = client.sessionId;
     const name =
       options.displayName?.slice(0, 20) ||
       `Tank-${client.sessionId.slice(0, 4)}`;
-    const choiceSeed = hashSeed(
-      this.joinCode,
-      client.sessionId,
-      "lobby-loadouts",
-    );
+
+    // ── Mid-match reconnect ──────────────────────────────────────────
+    if (this.sim?.status === "playing") {
+      const byId = options.playerId
+        ? this.sim.players.get(options.playerId) ?? null
+        : null;
+      const byName = this.sim.findDisconnectedByName(name);
+      const seat =
+        (byId && byId.disconnected ? byId : null) ?? byName;
+      if (seat && seat.alive) {
+        this.clearForfeit(seat.id);
+        this.sim.rebindSession(seat.id, client.sessionId);
+        const choiceSeed = hashSeed(this.joinCode, seat.id, "lobby-loadouts");
+        (client as Client & { userData: ClientData }).userData = {
+          name: seat.name,
+          ready: true,
+          loadoutChoices: generateLoadoutChoices(
+            choiceSeed,
+            this.config.budget,
+            3,
+          ),
+          selectedLoadoutIndex: 0,
+          playerId: seat.id,
+        };
+        if (!this.hostId) this.hostId = client.sessionId;
+        client.send(ServerMsg.Reconnected, {
+          matchSeed: this.sim.matchSeed,
+          config: this.sim.config,
+          players: this.sim.getPlayerList(),
+          wind: this.sim.wind,
+          turnIndex: this.sim.turnIndex,
+          currentPlayerId: this.sim.currentPlayerId(),
+          phase: this.sim.phase,
+          status: this.sim.status,
+          suddenDeath: this.sim.suddenDeath,
+        });
+        this.broadcastState();
+        this.updateMetaPlayers();
+        return;
+      }
+      client.send(ServerMsg.Error, {
+        message: "Match already in progress (no seat to reclaim)",
+      });
+      // Still allow join as spectator-ish reject — leave them in room without seat
+      return;
+    }
+
+    if (!this.hostId) this.hostId = client.sessionId;
+    const playerId =
+      options.playerId?.slice(0, 48) ||
+      `h-${hashSeed(this.joinCode, name, client.sessionId).toString(16)}`;
+    const choiceSeed = hashSeed(this.joinCode, playerId, "lobby-loadouts");
     (client as Client & { userData: ClientData }).userData = {
       name,
       ready: false,
       loadoutChoices: generateLoadoutChoices(choiceSeed, this.config.budget, 3),
       selectedLoadoutIndex: 0,
+      playerId,
     };
-
-    if (this.sim && this.sim.status === "playing") {
-      client.send(ServerMsg.Error, { message: "Match already in progress" });
-      return;
-    }
 
     this.updateMetaPlayers();
     this.broadcastLobby();
   }
 
   onLeave(client: Client): void {
+    const data = getClientData(client);
     if (this.sim?.status === "playing") {
-      const p = this.sim.players.get(client.sessionId);
-      if (p && p.alive) {
-        // Disconnect = forfeit, no kill credit
-        this.sim.eliminate(client.sessionId, null, "disconnect");
-        this.broadcast(ServerMsg.PlayerEliminated, {
-          id: p.id,
-          reason: "disconnect",
-        });
-        const alive = this.sim.getPlayerList().filter((x) => x.alive);
-        if (alive.length <= 1) {
-          this.finishMatch();
-          return;
-        }
-        if (this.sim.currentPlayerId() === client.sessionId) {
-          this.endTurn();
+      const p =
+        this.sim.players.get(data.playerId) ??
+        [...this.sim.players.values()].find(
+          (x) => x.sessionId === client.sessionId,
+        );
+      if (p && p.alive && !p.isBot) {
+        // Hold seat ~75s for reconnect instead of instant forfeit
+        p.disconnected = true;
+        this.broadcastState();
+        this.clearForfeit(p.id);
+        this.forfeitTimers.set(
+          p.id,
+          setTimeout(() => {
+            this.forfeitTimers.delete(p.id);
+            if (!this.sim || this.sim.status !== "playing") return;
+            const seat = this.sim.players.get(p.id);
+            if (!seat || !seat.disconnected || !seat.alive) return;
+            this.sim.eliminate(p.id, null, "disconnect");
+            this.broadcast(ServerMsg.PlayerEliminated, {
+              id: p.id,
+              reason: "disconnect",
+            });
+            const alive = this.sim.getPlayerList().filter((x) => x.alive);
+            if (alive.length <= 1) {
+              this.finishMatch();
+              return;
+            }
+            if (this.sim.currentPlayerId() === p.id) {
+              this.endTurn();
+            } else {
+              this.broadcastState();
+            }
+          }, 75_000),
+        );
+        // If it was their turn, auto-pass soon so match doesn't freeze
+        if (this.sim.currentPlayerId() === p.id) {
+          this.clearTimers();
+          this.resolveTimer = setTimeout(() => this.endTurn(), 1500);
         }
       }
     }
@@ -249,7 +334,26 @@ export class MatchRoom extends Room {
       this.hostId = next?.sessionId ?? null;
     }
     this.updateMetaPlayers();
-    this.broadcastLobby();
+    if (!this.sim || this.sim.status !== "playing") {
+      this.broadcastLobby();
+    }
+  }
+
+  private clearForfeit(playerId: string): void {
+    const t = this.forfeitTimers.get(playerId);
+    if (t) clearTimeout(t);
+    this.forfeitTimers.delete(playerId);
+  }
+
+  private playerIdFor(client: Client): string | null {
+    const data = getClientData(client);
+    if (this.sim) {
+      const bySession = [...this.sim.players.values()].find(
+        (p) => p.sessionId === client.sessionId,
+      );
+      if (bySession) return bySession.id;
+    }
+    return data.playerId ?? null;
   }
 
   private updateMetaPlayers(): void {
@@ -381,7 +485,7 @@ export class MatchRoom extends Room {
         data.loadoutChoices[data.selectedLoadoutIndex] ??
         data.loadoutChoices[0];
       this.sim.addPlayer({
-        id: c.sessionId,
+        id: data.playerId,
         sessionId: c.sessionId,
         name,
         isBot: false,
@@ -424,14 +528,15 @@ export class MatchRoom extends Room {
 
   private startTurn(): void {
     if (!this.sim || this.sim.status !== "playing") return;
-    // Skip dead current players (can happen after bad advance / disconnect races)
+    // Skip dead / disconnected current players
     let playerId = this.sim.currentPlayerId();
     let hops = 0;
     while (
       playerId &&
-      !this.sim.players.get(playerId)?.alive &&
       hops < (this.sim.turnOrder.length || 1) + 2
     ) {
+      const seat = this.sim.players.get(playerId);
+      if (seat?.alive && !seat.disconnected) break;
       const next = this.sim.advanceTurn();
       if (!next) {
         this.finishMatch();
@@ -449,10 +554,52 @@ export class MatchRoom extends Room {
       this.finishMatch();
       return;
     }
+    // Still disconnected (no connected humans left for this seat) — auto pass
+    if (cur.disconnected) {
+      this.endTurn();
+      return;
+    }
 
     this.sim.refillFuelFor(playerId);
     // Empty primary → Peashooter ∞ (humans and bots)
     this.sim.ensureDefaultWeapon(playerId);
+
+    // Sudden death hazards at turn start
+    const sd = this.sim.runSuddenDeathTick();
+    if (sd.message || sd.justActivated) {
+      if (sd.terrainOps.length) {
+        this.broadcast(ServerMsg.TerrainDelta, { ops: sd.terrainOps });
+      }
+      for (const d of sd.damages) {
+        this.broadcast(ServerMsg.Damage, d);
+      }
+      for (const id of sd.eliminated) {
+        this.broadcast(ServerMsg.PlayerEliminated, {
+          id,
+          reason: "sudden_death",
+        });
+      }
+      this.broadcast(ServerMsg.SuddenDeath, {
+        state: this.sim.suddenDeath,
+        terrainOps: sd.terrainOps,
+        damages: sd.damages,
+        eliminated: sd.eliminated.map((id) => ({
+          id,
+          reason: "sudden_death",
+        })),
+        message: sd.message,
+      });
+      const living = this.sim.getPlayerList().filter((p) => p.alive);
+      if (living.length <= 1) {
+        this.finishMatch();
+        return;
+      }
+      // Current player may have died to SD
+      if (!this.sim.players.get(playerId)?.alive) {
+        this.endTurn();
+        return;
+      }
+    }
 
     this.clearTimers();
     this.turnEpoch += 1;
@@ -464,6 +611,7 @@ export class MatchRoom extends Room {
       wind: this.sim.wind,
       timeSec: this.config.turnTimeSec,
       phase: this.sim.phase,
+      suddenDeath: this.sim.suddenDeath,
     });
     this.broadcastState();
 
@@ -473,7 +621,10 @@ export class MatchRoom extends Room {
     }, this.config.turnTimeSec * 1000);
 
     if (cur.isBot) {
-      const delay = botThinkDelayMs(cur.identity?.persona);
+      const delay = botThinkDelayMs(
+        cur.identity?.persona,
+        this.config.botDifficulty,
+      );
       this.botTimer = setTimeout(() => {
         if (this.turnEpoch !== epoch) return;
         this.runBotTurn(epoch);
@@ -493,7 +644,7 @@ export class MatchRoom extends Room {
 
     try {
       this.sim.ensureDefaultWeapon(cur.id);
-      const act = botAct(this.sim);
+      const act = botAct(this.sim, this.config.botDifficulty);
 
       // Spend a bit of fuel moving (several substeps) so bots actually reposition
       if (act.moveDir !== 0) {
@@ -679,12 +830,15 @@ export class MatchRoom extends Room {
 
   onDispose(): void {
     this.clearTimers();
+    for (const t of this.forfeitTimers.values()) clearTimeout(t);
+    this.forfeitTimers.clear();
   }
 }
 
 function getClientData(client: Client): ClientData {
   const c = client as Client & { userData?: ClientData };
   if (!c.userData) {
+    const playerId = `h-${hashSeed(client.sessionId, "fallback-id").toString(16)}`;
     c.userData = {
       name: "Tank",
       ready: false,
@@ -694,6 +848,7 @@ function getClientData(client: Client): ClientData {
         3,
       ),
       selectedLoadoutIndex: 0,
+      playerId,
     };
   }
   return c.userData;

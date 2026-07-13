@@ -1,9 +1,12 @@
 import * as THREE from "three";
 import {
+  applyTerrainOpToWorld,
+  chunkKey,
   generateMap,
   simulateWeaponFire,
   type MatchConfig,
   type PlayerState,
+  type SuddenDeathState,
   type TerrainOp,
   type VoxelWorld,
   type WeaponDef,
@@ -106,6 +109,13 @@ export class GameRenderer {
     done: boolean;
   } | null = null;
   private cameraLockedByIntro = false;
+  /** Sudden-death hazard visuals (water / UFO / hurricane eye) */
+  private sdGroup = new THREE.Group();
+  private sdWater: THREE.Mesh | null = null;
+  private sdUfo: THREE.Group | null = null;
+  private sdHurricane: THREE.Mesh | null = null;
+  private sdState: SuddenDeathState | null = null;
+  private sdTime = 0;
 
   constructor(canvas: HTMLCanvasElement) {
     this.camera = new THREE.PerspectiveCamera(40, 1, 0.1, 500);
@@ -130,6 +140,8 @@ export class GameRenderer {
 
     this.env = new Environment(this.scene);
     this.env.attachLights(this.hemiLight, this.sunLight);
+    this.sdGroup.renderOrder = 8;
+    this.scene.add(this.sdGroup);
 
     const trajGeo = new THREE.BufferGeometry();
     const trajMat = new THREE.LineDashedMaterial({
@@ -224,6 +236,9 @@ export class GameRenderer {
 
     // Full-map establishing shot
     this.frameFullMap(true);
+    this.clearSuddenDeathVfx();
+    this.sdState = null;
+    this.env.setHazardIntensity(0);
   }
 
   getMapName(): string {
@@ -232,6 +247,141 @@ export class GameRenderer {
 
   setWind(wind: number): void {
     this.env.setWind(wind);
+  }
+
+  /** Apply / clear late-game sudden death hazard meshes. */
+  setSuddenDeath(state: SuddenDeathState | null | undefined): void {
+    if (!state?.active || !state.mode) {
+      this.clearSuddenDeathVfx();
+      this.sdState = null;
+      this.env.setHazardIntensity(0);
+      return;
+    }
+    this.sdState = state;
+    const intensity =
+      state.mode === "hurricane"
+        ? 1.6 + Math.min(1.2, state.tick * 0.12)
+        : state.mode === "rising_water"
+          ? 0.55
+          : 0.35;
+    this.env.setHazardIntensity(intensity);
+
+    if (state.mode === "rising_water") {
+      this.ensureWaterPlane();
+      if (this.sdWater) {
+        const y = Math.max(0.5, state.waterLevel);
+        this.sdWater.position.set(this.mapWidth / 2, y, this.midZ);
+        this.sdWater.scale.set(this.mapWidth * 1.4, 1, this.mapWidth * 0.35);
+        this.sdWater.visible = true;
+      }
+      if (this.sdUfo) this.sdUfo.visible = false;
+      if (this.sdHurricane) this.sdHurricane.visible = false;
+    } else if (state.mode === "ufo") {
+      this.ensureUfoMesh();
+      if (this.sdUfo) {
+        this.sdUfo.position.set(state.ufoX, state.ufoY, this.midZ + 1.5);
+        this.sdUfo.visible = true;
+      }
+      if (this.sdWater) this.sdWater.visible = false;
+      if (this.sdHurricane) this.sdHurricane.visible = false;
+    } else if (state.mode === "hurricane") {
+      this.ensureHurricaneMesh();
+      if (this.sdHurricane) {
+        this.sdHurricane.position.set(
+          state.hurricaneX,
+          this.mapHeight * 0.55,
+          this.midZ - 4,
+        );
+        this.sdHurricane.visible = true;
+      }
+      if (this.sdWater) this.sdWater.visible = false;
+      if (this.sdUfo) this.sdUfo.visible = false;
+    } else {
+      // exploding_mountain — terrain ops carry the show
+      if (this.sdWater) this.sdWater.visible = false;
+      if (this.sdUfo) this.sdUfo.visible = false;
+      if (this.sdHurricane) this.sdHurricane.visible = false;
+    }
+  }
+
+  private clearSuddenDeathVfx(): void {
+    while (this.sdGroup.children.length) {
+      const c = this.sdGroup.children[0]!;
+      this.sdGroup.remove(c);
+      c.traverse((obj) => {
+        if (obj instanceof THREE.Mesh) {
+          obj.geometry.dispose();
+          const m = obj.material;
+          if (Array.isArray(m)) m.forEach((x) => x.dispose());
+          else m.dispose();
+        }
+      });
+    }
+    this.sdWater = null;
+    this.sdUfo = null;
+    this.sdHurricane = null;
+  }
+
+  private ensureWaterPlane(): void {
+    if (this.sdWater) return;
+    const mat = new THREE.MeshBasicMaterial({
+      color: 0x1a6aa8,
+      transparent: true,
+      opacity: 0.42,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+    this.sdWater = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), mat);
+    this.sdWater.rotation.x = -Math.PI / 2;
+    this.sdGroup.add(this.sdWater);
+  }
+
+  private ensureUfoMesh(): void {
+    if (this.sdUfo) return;
+    const g = new THREE.Group();
+    const body = new THREE.Mesh(
+      new THREE.SphereGeometry(2.2, 12, 8),
+      new THREE.MeshBasicMaterial({ color: 0xc8d4e0 }),
+    );
+    body.scale.set(1.6, 0.45, 1.2);
+    const dome = new THREE.Mesh(
+      new THREE.SphereGeometry(1.1, 10, 8),
+      new THREE.MeshBasicMaterial({
+        color: 0x66ffcc,
+        transparent: true,
+        opacity: 0.75,
+      }),
+    );
+    dome.position.y = 0.55;
+    const beam = new THREE.Mesh(
+      new THREE.ConeGeometry(1.8, 10, 8, 1, true),
+      new THREE.MeshBasicMaterial({
+        color: 0x88ffaa,
+        transparent: true,
+        opacity: 0.22,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      }),
+    );
+    beam.position.y = -5;
+    beam.rotation.x = Math.PI;
+    g.add(body, dome, beam);
+    this.sdUfo = g;
+    this.sdGroup.add(g);
+  }
+
+  private ensureHurricaneMesh(): void {
+    if (this.sdHurricane) return;
+    const mat = new THREE.MeshBasicMaterial({
+      color: 0x8899aa,
+      transparent: true,
+      opacity: 0.28,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+    this.sdHurricane = new THREE.Mesh(new THREE.TorusGeometry(14, 3.5, 8, 28), mat);
+    this.sdHurricane.rotation.x = Math.PI / 2.4;
+    this.sdGroup.add(this.sdHurricane);
   }
 
   /** Distance needed to fit the full arena in view (with padding). */
@@ -386,6 +536,22 @@ export class GameRenderer {
     if (!this.world || ops.length === 0) return;
     const dirty = new Set<string>();
     for (const op of ops) {
+      const mat = op.material ?? VoxelMaterial.Air;
+      // Fills (buried mountain Rock) use shared apply; digs use stamp with dirty keys
+      if (mat !== VoxelMaterial.Air) {
+        applyTerrainOpToWorld(this.world, op);
+        const r = Math.ceil(op.radius) + 2;
+        const cx = Math.round(op.x);
+        const cy = Math.round(op.y);
+        for (let y = cy - r; y <= cy + r; y += 2) {
+          for (let x = cx - r; x <= cx + r; x += 2) {
+            for (let z = 0; z < this.world.depth; z += 2) {
+              dirty.add(chunkKey(x, y, z));
+            }
+          }
+        }
+        continue;
+      }
       const keys =
         op.kind === "ellipsoid"
           ? this.world.stampEllipsoid(
@@ -395,7 +561,7 @@ export class GameRenderer {
               op.radius,
               op.radiusY ?? op.radius,
               op.radiusZ ?? op.radius,
-              op.material ?? VoxelMaterial.Air,
+              mat,
               true,
             )
           : this.world.stampSphere(
@@ -403,7 +569,7 @@ export class GameRenderer {
               Math.round(op.y),
               Math.round(op.z),
               op.radius,
-              op.material ?? VoxelMaterial.Air,
+              mat,
               true,
             );
       for (const k of keys) dirty.add(k);
@@ -982,6 +1148,20 @@ export class GameRenderer {
     const now = performance.now();
 
     this.env.update(dt);
+    this.sdTime += dt;
+    if (this.sdUfo?.visible) {
+      this.sdUfo.rotation.y += dt * 1.8;
+      this.sdUfo.position.y += Math.sin(this.sdTime * 2.2) * 0.02;
+    }
+    if (this.sdHurricane?.visible) {
+      this.sdHurricane.rotation.z += dt * (1.2 + Math.abs(this.sdState?.windOverride ?? 1));
+      const s = 1 + Math.sin(this.sdTime * 1.4) * 0.08;
+      this.sdHurricane.scale.set(s, s, s);
+    }
+    if (this.sdWater?.visible) {
+      const mat = this.sdWater.material as THREE.MeshBasicMaterial;
+      mat.opacity = 0.36 + Math.sin(this.sdTime * 1.5) * 0.06;
+    }
     this.updateIntro(now);
 
     if (this.animProjectile) {

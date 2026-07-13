@@ -24,6 +24,15 @@ export interface Vec3 {
   z: number;
 }
 
+/** Late-game hazard mode — one is rolled when sudden death begins. */
+export type SuddenDeathMode =
+  | "rising_water"
+  | "exploding_mountain"
+  | "ufo"
+  | "hurricane";
+
+export type BotDifficulty = "easy" | "normal" | "hard";
+
 export interface MatchConfig {
   maxPlayers: number;
   budget: number;
@@ -33,7 +42,9 @@ export interface MatchConfig {
   mapDepth: number;
   isPrivate: boolean;
   fillBots: boolean;
+  /** Global turn index when sudden death can activate (alive > 1). */
   suddenDeathTurns: number;
+  botDifficulty: BotDifficulty;
 }
 
 export const DEFAULT_MATCH_CONFIG: MatchConfig = {
@@ -45,8 +56,28 @@ export const DEFAULT_MATCH_CONFIG: MatchConfig = {
   mapDepth: 12,
   isPrivate: false,
   fillBots: true,
-  suddenDeathTurns: 20,
+  suddenDeathTurns: 16,
+  botDifficulty: "normal",
 };
+
+export interface SuddenDeathState {
+  active: boolean;
+  mode: SuddenDeathMode | null;
+  /** Human label for banners */
+  label: string;
+  /** Turns since SD activated (0 = just started) */
+  tick: number;
+  /** Rising water: world Y of water surface */
+  waterLevel: number;
+  /** Exploding mountain: epicenter X */
+  mountainX: number;
+  /** UFO position */
+  ufoX: number;
+  ufoY: number;
+  /** Hurricane center X + wind override strength */
+  hurricaneX: number;
+  windOverride: number | null;
+}
 
 export type TrajectoryType =
   | "ballistic"
@@ -144,6 +175,8 @@ export interface PlayerState {
   kills: number;
   damageDealt: number;
   alive: boolean;
+  /** Human left the room; seat held for reconnect until forfeit. */
+  disconnected?: boolean;
   /** Elimination order: 1 = winner, higher = out earlier. 0 = still active. */
   place: number;
   /** Last player who damaged this tank (for fall / crater kill credit). */

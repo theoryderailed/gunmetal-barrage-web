@@ -7,7 +7,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { MatchRoom } from "./rooms/MatchRoom.js";
-import { topLeaderboard } from "./db/leaderboard.js";
+import { getDataDir, getDbPath, topLeaderboard } from "./db/leaderboard.js";
 
 const PORT = Number(process.env.PORT ?? 2567);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -20,7 +20,12 @@ app.use(cors());
 app.use(express.json());
 
 app.get("/health", (_req, res) => {
-  res.json({ ok: true, service: "gunmetal-barrage" });
+  res.json({
+    ok: true,
+    service: "gunmetal-barrage",
+    dataDir: getDataDir(),
+    dbPath: getDbPath(),
+  });
 });
 
 app.get("/api/leaderboard", (_req, res) => {

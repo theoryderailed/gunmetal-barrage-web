@@ -10,6 +10,8 @@ import {
   type MatchStartedPayload,
   type MovePayload,
   type PlayerState,
+  type ReconnectedPayload,
+  type SuddenDeathPayload,
   type TerrainOp,
   type TurnStartPayload,
 } from "@gunmetal-barrage/shared";
@@ -32,6 +34,25 @@ function resolveDefaultWs(): string {
 }
 
 const DEFAULT_WS = resolveDefaultWs();
+
+const PLAYER_ID_KEY = "tdw-player-id";
+
+/** Stable pilot id across tab refresh / mid-match reconnect. */
+export function getStablePlayerId(): string {
+  try {
+    let id = localStorage.getItem(PLAYER_ID_KEY);
+    if (!id) {
+      id =
+        typeof crypto !== "undefined" && "randomUUID" in crypto
+          ? `h-${crypto.randomUUID()}`
+          : `h-${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
+      localStorage.setItem(PLAYER_ID_KEY, id);
+    }
+    return id.slice(0, 48);
+  } catch {
+    return `h-session-${Date.now().toString(36)}`;
+  }
+}
 
 export interface LoadoutPreview {
   tankName: string;
@@ -105,6 +126,8 @@ export interface GameNetHandlers {
     config: MatchConfig;
   }) => void;
   onMatchEnd?: (data: MatchEndPayload) => void;
+  onSuddenDeath?: (data: SuddenDeathPayload) => void;
+  onReconnected?: (data: ReconnectedPayload) => void;
   onError?: (data: { message: string }) => void;
   onLeave?: () => void;
 }
@@ -113,9 +136,18 @@ export class GameClient {
   private client: Client;
   room: Room | null = null;
   sessionId: string | null = null;
+  /** Seat id once known (from match players / reconnect). */
+  playerId: string | null = null;
 
   constructor(private handlers: GameNetHandlers = {}) {
     this.client = new Client(DEFAULT_WS);
+  }
+
+  private joinOptions(extra: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      playerId: getStablePlayerId(),
+      ...extra,
+    };
   }
 
   async createMatch(options: {
@@ -124,14 +156,18 @@ export class GameClient {
     displayName?: string;
     maxPlayers?: number;
     fillBots?: boolean;
+    botDifficulty?: "easy" | "normal" | "hard";
   }): Promise<Room> {
-    const room = await this.client.create("match", options);
+    const room = await this.client.create("match", this.joinOptions(options));
     this.bindRoom(room);
     return room;
   }
 
   async joinById(roomId: string, displayName?: string): Promise<Room> {
-    const room = await this.client.joinById(roomId, { displayName });
+    const room = await this.client.joinById(
+      roomId,
+      this.joinOptions({ displayName }),
+    );
     this.bindRoom(room);
     return room;
   }
@@ -151,6 +187,11 @@ export class GameClient {
   private bindRoom(room: Room): void {
     this.room = room;
     this.sessionId = room.sessionId;
+    try {
+      sessionStorage.setItem("tdw-last-room", room.roomId);
+    } catch {
+      /* ignore */
+    }
 
     room.onMessage("lobby_state", (data) => this.handlers.onLobby?.(data));
     room.onMessage(ServerMsg.MatchStarted, (data) =>
@@ -178,6 +219,12 @@ export class GameClient {
     room.onMessage("match_state", (data) => this.handlers.onMatchState?.(data));
     room.onMessage(ServerMsg.MatchEnd, (data) =>
       this.handlers.onMatchEnd?.(data),
+    );
+    room.onMessage(ServerMsg.SuddenDeath, (data) =>
+      this.handlers.onSuddenDeath?.(data),
+    );
+    room.onMessage(ServerMsg.Reconnected, (data) =>
+      this.handlers.onReconnected?.(data),
     );
     room.onMessage(ServerMsg.Error, (data) => this.handlers.onError?.(data));
     room.onLeave(() => this.handlers.onLeave?.());

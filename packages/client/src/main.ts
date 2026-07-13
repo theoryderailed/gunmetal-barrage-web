@@ -33,6 +33,7 @@ import {
   GameClient,
   fetchLeaderboard,
   fetchPublicRooms,
+  getStablePlayerId,
   type LobbyPlayer,
 } from "./net/Client";
 import {
@@ -95,6 +96,14 @@ let toast = "";
 let toastTimer = 0;
 let rankings: MatchResultEntry[] = [];
 let myId: string | null = null;
+/** Stable pilot id for reconnect (also sent on join). */
+const stablePlayerId = getStablePlayerId();
+let audioMuted = localStorage.getItem("tdw-mute") === "1";
+let botDifficulty: "easy" | "normal" | "hard" = (() => {
+  const d = localStorage.getItem("tdw-bot-diff");
+  return d === "easy" || d === "hard" || d === "normal" ? d : "normal";
+})();
+sfx.setEnabled(!audioMuted);
 /** Sandbox catalog index into weapon list (1–8 keys). */
 let sandboxWeaponIndex = 0;
 /** Spawn pads for sandbox respawn. */
@@ -228,11 +237,12 @@ const net = new GameClient({
       fuel: p.loadout?.chassis.fuel ?? p.fuel,
     }));
     wind = data.wind;
-    myId = net.sessionId;
+    myId = resolveMyId(data.players);
     pendingImpact = null;
     postShotLock = false;
     renderer.loadMatch(data.matchSeed, data.config, players);
     renderer.setWind(data.wind);
+    renderer.setSuddenDeath(null);
     // Full map → drop-ins → zoom to first pilot
     renderer.playMatchIntro(players, data.firstPlayerId ?? null);
     // Compact loadout cards during the wide shot
@@ -254,6 +264,9 @@ const net = new GameClient({
     turnTimeMax = data.timeSec;
     turnEndsAt = performance.now() + data.timeSec * 1000;
     renderer.setWind(data.wind);
+    if (data.suddenDeath) {
+      renderer.setSuddenDeath(data.suddenDeath);
+    }
     const p = players.find((x) => x.id === data.playerId);
     if (p) {
       p.power = DEFAULT_POWER;
@@ -397,6 +410,12 @@ const net = new GameClient({
     renderer.syncPlayers(players);
   },
   onMatchEnd: (data) => {
+    try {
+      sessionStorage.removeItem("tdw-last-room");
+    } catch {
+      /* ignore */
+    }
+    renderer.setSuddenDeath(null);
     if (pendingImpact || renderer.isProjectileFlying()) {
       if (!pendingImpact) pendingImpact = createPendingImpact();
       pendingImpact.matchEnd = data.rankings;
@@ -409,11 +428,62 @@ const net = new GameClient({
       void showMenu();
     });
   },
+  onSuddenDeath: (data) => {
+    // Terrain / damage / elim also go out as TerrainDelta + Damage + Eliminated
+    renderer.setSuddenDeath(data.state);
+    if (data.message) {
+      const justOn = !!data.state?.active && (data.state.tick ?? 0) === 0;
+      showBanner(data.message, justOn ? 3200 : 1800);
+      showToast(data.message);
+      if (justOn) sfx.impact(true);
+    }
+  },
+  onReconnected: (data) => {
+    stopAmbientDemo();
+    mode = "playing";
+    spectating = false;
+    players = data.players.map((p) => ({ ...p }));
+    wind = data.wind;
+    currentPlayerId = data.currentPlayerId;
+    phase = data.phase;
+    myId = resolveMyId(data.players);
+    pendingImpact = null;
+    postShotLock = false;
+    turnTimeMax = data.config.turnTimeSec;
+    turnEndsAt = performance.now() + data.config.turnTimeSec * 1000;
+    renderer.loadMatch(data.matchSeed, data.config, players);
+    renderer.setWind(data.wind);
+    renderer.setSuddenDeath(data.suddenDeath);
+    const me = players.find((p) => p.id === myId);
+    if (me && !me.alive) spectating = true;
+    renderer.focusPlayer(
+      players.find((p) => p.id === data.currentPlayerId) ?? me,
+    );
+    showBanner("RECONNECTED", 2000);
+    showToast("Back in the fight");
+    sfx.ui();
+    uiRoot.innerHTML = "";
+  },
   onError: (data) => showToast(data.message),
   onLeave: () => {
     if (mode !== "menu" && mode !== "results") void showMenu();
   },
 });
+
+/** Map Colyseus session → stable seat id used by simulation. */
+function resolveMyId(list: PlayerState[]): string | null {
+  const bySession = list.find((p) => p.sessionId === net.sessionId);
+  if (bySession) {
+    net.playerId = bySession.id;
+    return bySession.id;
+  }
+  const byStable = list.find((p) => p.id === stablePlayerId);
+  if (byStable) {
+    net.playerId = byStable.id;
+    return byStable.id;
+  }
+  return net.sessionId;
+}
 
 async function showMenu(): Promise<void> {
   mode = "menu";
@@ -424,12 +494,54 @@ async function showMenu(): Promise<void> {
   }
   sfx.ui();
   ensureAmbientDemo();
+  let resumeRoomId: string | null = null;
+  try {
+    resumeRoomId = sessionStorage.getItem("tdw-last-room");
+  } catch {
+    resumeRoomId = null;
+  }
   renderMenu(uiRoot, {
     name: displayName,
     rooms,
+    muted: audioMuted,
+    botDifficulty,
+    resumeRoomId,
     onName: (n) => {
       displayName = n.slice(0, 20) || "Commander";
       localStorage.setItem("tdw-name", displayName);
+    },
+    onMuteChange: (muted) => {
+      audioMuted = muted;
+      localStorage.setItem("tdw-mute", muted ? "1" : "0");
+      sfx.setEnabled(!muted);
+      if (!muted) sfx.ui();
+    },
+    onBotDifficulty: (d) => {
+      botDifficulty = d;
+      localStorage.setItem("tdw-bot-diff", d);
+      sfx.ui();
+      void showMenu();
+    },
+    onResumeMatch: async () => {
+      if (!resumeRoomId) return;
+      try {
+        sfx.ui();
+        await net.joinById(resumeRoomId, displayName);
+        // Reconnected handler switches to playing; lobby if still waiting
+        if (mode !== "playing") {
+          mode = "lobby";
+          ready = false;
+          showLobby();
+        }
+      } catch (e) {
+        try {
+          sessionStorage.removeItem("tdw-last-room");
+        } catch {
+          /* ignore */
+        }
+        showToast(`Could not resume: ${String(e)}`);
+        void showMenu();
+      }
     },
     onCreatePublic: async () => {
       try {
@@ -439,6 +551,7 @@ async function showMenu(): Promise<void> {
           isPrivate: false,
           displayName,
           fillBots: true,
+          botDifficulty,
         });
         mode = "lobby";
         ready = false;
@@ -455,6 +568,7 @@ async function showMenu(): Promise<void> {
           isPrivate: true,
           displayName,
           fillBots: true,
+          botDifficulty,
         });
         mode = "lobby";
         ready = false;
@@ -1085,6 +1199,19 @@ window.addEventListener("keydown", (e) => {
     if (e.repeat) return;
     fireShot("secondary");
     return;
+  }
+  // M: toggle mute (anywhere)
+  if (e.code === "KeyM" && !e.repeat) {
+    const tag = (e.target as HTMLElement | null)?.tagName;
+    if (tag !== "INPUT" && tag !== "TEXTAREA") {
+      e.preventDefault();
+      audioMuted = !audioMuted;
+      localStorage.setItem("tdw-mute", audioMuted ? "1" : "0");
+      sfx.setEnabled(!audioMuted);
+      showToast(audioMuted ? "Sound muted" : "Sound on");
+      if (!audioMuted) sfx.ui();
+      return;
+    }
   }
   keys.add(e.code);
   if (e.code === "Escape") {

@@ -12,17 +12,21 @@ import {
   generateMap,
   getWeaponById,
   hashSeed,
+  applyTerrainOpToWorld,
+  createInitialSuddenDeathState,
   isTornadoWeapon,
   moveAlongTerrain,
   moveSpeed,
   resolveBlastDamage,
   resolveTornadoThrows,
   simulateWeaponFire,
+  tickSuddenDeath,
   type DamageEvent,
   type MatchConfig,
   type MatchResultEntry,
   type PilotIdentity,
   type PlayerState,
+  type SuddenDeathState,
   type TerrainOp,
   type TurnPhase,
   type VoxelWorld,
@@ -59,6 +63,7 @@ export class MatchSimulation {
   private spawns: { x: number; y: number }[];
   private spawnClaimOrder: number[] = [];
   private nextSpawnSlot = 0;
+  suddenDeath: SuddenDeathState;
 
   constructor(matchSeed: number, config: Partial<MatchConfig> = {}) {
     this.config = { ...DEFAULT_MATCH_CONFIG, ...config };
@@ -68,6 +73,7 @@ export class MatchSimulation {
     this.spawns = map.spawns;
     this.midZ = Math.floor(this.config.mapDepth / 2);
     this.nextPlace = this.config.maxPlayers; // reset in start() to live player count
+    this.suddenDeath = createInitialSuddenDeathState(matchSeed, this.config);
     // Shuffle claim order so bots/humans don't always take left-to-right
     const rng = createRng(hashSeed(matchSeed, "spawn-order"));
     this.spawnClaimOrder = map.spawns.map((_, i) => i);
@@ -137,11 +143,36 @@ export class MatchSimulation {
       kills: 0,
       damageDealt: 0,
       alive: true,
+      disconnected: false,
       place: 0,
       lastAttackerId: null,
     };
     this.players.set(opts.id, player);
     return player;
+  }
+
+  /** Rebind a human seat after tab refresh / reconnect. */
+  rebindSession(playerId: string, newSessionId: string): PlayerState | null {
+    const p = this.players.get(playerId);
+    if (!p || p.isBot) return null;
+    p.sessionId = newSessionId;
+    p.disconnected = false;
+    return p;
+  }
+
+  findDisconnectedByName(name: string): PlayerState | null {
+    const n = name.trim().toLowerCase();
+    for (const p of this.players.values()) {
+      if (
+        !p.isBot &&
+        p.disconnected &&
+        p.alive &&
+        p.name.trim().toLowerCase() === n
+      ) {
+        return p;
+      }
+    }
+    return null;
   }
 
   getPlayerList(): PlayerState[] {
@@ -590,31 +621,127 @@ export class MatchSimulation {
 
   advanceTurn(): { playerId: string; wind: number; turnIndex: number } | null {
     if (this.status !== "playing") return null;
-    const aliveIds = this.turnOrder.filter((id) => this.players.get(id)?.alive);
-    if (aliveIds.length <= 1) return null;
+    const aliveIds = this.turnOrder.filter((id) => {
+      const p = this.players.get(id);
+      return p?.alive && !p.disconnected;
+    });
+    // Disconnected-but-alive still count as "in match" for win check
+    const living = this.turnOrder.filter((id) => this.players.get(id)?.alive);
+    if (living.length <= 1) return null;
 
-    // Always land on a living pilot (old loop could exit still on a corpse)
+    // Prefer living connected players; if all remaining are disconnected, still advance
     const n = this.turnOrder.length;
     for (let guard = 0; guard < n + 2; guard++) {
       this.turnIndex += 1;
       const id = this.currentPlayerId();
-      if (id && this.players.get(id)?.alive) break;
+      const p = id ? this.players.get(id) : null;
+      if (p?.alive && !p.disconnected) break;
+      if (p?.alive && aliveIds.length === 0) break;
     }
 
     const curId = this.currentPlayerId();
-    if (!curId || !this.players.get(curId)?.alive) return null;
+    const cur = curId ? this.players.get(curId) : null;
+    if (!curId || !cur?.alive) return null;
 
+    // Base wind roll — hurricane SD may override after tick
     this.wind = this.rollWind();
+    if (this.suddenDeath.active && this.suddenDeath.windOverride != null) {
+      this.wind = this.suddenDeath.windOverride;
+    }
     this.phase = "move";
-    const cur = this.currentPlayer();
-    if (cur?.loadout) {
-      // Full fuel every turn
+    if (cur.loadout) {
       cur.fuel = cur.loadout.chassis.fuel;
     }
     return {
       playerId: curId,
       wind: this.wind,
       turnIndex: this.turnIndex,
+    };
+  }
+
+  /**
+   * Apply sudden-death tick at turn start. Returns payload pieces for broadcast.
+   */
+  runSuddenDeathTick(): {
+    justActivated: boolean;
+    message: string;
+    terrainOps: TerrainOp[];
+    damages: DamageEvent[];
+    eliminated: string[];
+  } {
+    const result = tickSuddenDeath({
+      state: this.suddenDeath,
+      matchSeed: this.matchSeed,
+      config: this.config,
+      world: this.world,
+      midZ: this.midZ,
+      turnIndex: this.turnIndex,
+      players: this.getPlayerList().map((p) => ({
+        id: p.id,
+        x: p.x,
+        y: p.y,
+        alive: p.alive,
+        hp: p.hp,
+      })),
+    });
+
+    this.suddenDeath = result.state;
+    if (result.windOverride != null) {
+      this.wind = result.windOverride;
+      this.suddenDeath.windOverride = result.windOverride;
+    }
+
+    for (const op of result.terrainOps) {
+      applyTerrainOpToWorld(this.world, op);
+      // Digs + fills (buried mountain plant) — clients need both
+      this.terrainOps.push(op);
+    }
+
+    const damages: DamageEvent[] = [];
+    const eliminated: string[] = [];
+
+    for (const d of result.damages) {
+      const t = this.players.get(d.targetId);
+      if (!t?.alive) continue;
+      t.hp -= d.amount;
+      t.lastAttackerId = null; // environmental
+      damages.push({
+        targetId: d.targetId,
+        amount: d.amount,
+        sourceId: d.sourceId,
+        x: t.x,
+        y: t.y,
+      });
+      if (t.hp <= 0) {
+        if (this.eliminate(d.targetId, null, "blast")) {
+          eliminated.push(d.targetId);
+        }
+      }
+    }
+
+    for (const id of result.killIds) {
+      if (this.eliminate(id, null, "fall")) {
+        eliminated.push(id);
+      }
+    }
+
+    // Snap after terrain
+    for (const t of this.players.values()) {
+      if (!t.alive) continue;
+      if (this.snapToGround(t)) {
+        if (this.eliminate(t.id, null, "fall")) {
+          eliminated.push(t.id);
+        }
+      }
+    }
+
+    return {
+      justActivated: result.justActivated,
+      message: result.message,
+      // Include Rock fills so clients plant the buried mountain
+      terrainOps: result.terrainOps,
+      damages,
+      eliminated: [...new Set(eliminated)],
     };
   }
 

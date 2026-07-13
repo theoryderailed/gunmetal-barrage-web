@@ -2,6 +2,7 @@ import {
   clampAngle,
   clampPower,
   previewTrajectory,
+  type BotDifficulty,
   type BotPersona,
   type PlayerState,
   type VoxelWorld,
@@ -18,15 +19,19 @@ export interface BotAction {
 
 /**
  * Persona-aware heuristic bot. Same action API as humans.
+ * Difficulty scales aim noise, think delay, and movement caution.
  */
-export function botAct(sim: MatchSimulation): BotAction {
+export function botAct(
+  sim: MatchSimulation,
+  difficulty: BotDifficulty = "normal",
+): BotAction {
   const self = sim.currentPlayer();
   if (!self || !self.loadout) {
     return { moveDir: 0, angle: 45, power: 50, facing: 1, weaponSlot: "primary" };
   }
 
   const persona: BotPersona = self.identity?.persona ?? "artillery";
-  const skill = self.identity?.skill ?? 0.5;
+  const skill = effectiveSkill(self.identity?.skill ?? 0.5, difficulty);
 
   const enemies = sim
     .getPlayerList()
@@ -36,14 +41,15 @@ export function botAct(sim: MatchSimulation): BotAction {
       (a, b) => Math.abs(a.x - self.x) - Math.abs(b.x - self.x),
     )[0] ?? null;
 
-  const moveDir = pickMove(self, target, persona);
+  const midZ = Math.floor(sim.world.depth / 2);
+  const moveDir = pickMove(sim.world, self, target, persona, midZ, skill);
   const facing: 1 | -1 = target
     ? target.x >= self.x
       ? 1
       : -1
     : self.facing;
 
-  const weaponSlot = pickWeapon(self, persona);
+  const weaponSlot = pickWeapon(self, persona, skill);
 
   const weapon =
     weaponSlot === "secondary" && self.loadout.secondary
@@ -70,49 +76,131 @@ export function botAct(sim: MatchSimulation): BotAction {
   };
 }
 
+function effectiveSkill(base: number, difficulty: BotDifficulty): number {
+  switch (difficulty) {
+    case "easy":
+      return Math.min(0.32, base * 0.45 + 0.05);
+    case "hard":
+      return Math.min(1, Math.max(0.78, base * 1.15 + 0.22));
+    default:
+      return Math.min(1, Math.max(0.35, base));
+  }
+}
+
+/**
+ * Prefer solid ground. Avoid walking into void / thin island edges when skill is high.
+ */
+function isSafeStep(
+  world: VoxelWorld,
+  x: number,
+  midZ: number,
+): boolean {
+  if (world.isVoidColumn(x, midZ)) return false;
+  const g = world.sampleGroundY(x, midZ);
+  if (g < 0) return false;
+  // Peek one unit further so we don't step onto a one-voxel ledge over the void
+  const g2 = world.sampleGroundY(x + (x >= 0 ? 0.6 : -0.6), midZ);
+  if (g2 < 0 || world.isVoidColumn(x + 0.8, midZ) || world.isVoidColumn(x - 0.8, midZ)) {
+    // Allow if current column is solid enough
+    return g >= 2;
+  }
+  return true;
+}
+
 function pickMove(
+  world: VoxelWorld,
   self: PlayerState,
   target: PlayerState | null,
   persona: BotPersona,
+  midZ: number,
+  skill: number,
 ): -1 | 0 | 1 {
   if (!target) return 0;
   const dx = target.x - self.x;
   const dist = Math.abs(dx);
 
+  let desired: -1 | 0 | 1 = 0;
   switch (persona) {
     case "camper":
-      // Rarely move; only if very exposed (close)
-      if (dist < 10) return dx > 0 ? -1 : 1;
-      return Math.random() < 0.15 ? (dx > 0 ? 1 : -1) : 0;
+      if (dist < 10) desired = dx > 0 ? -1 : 1;
+      else desired = Math.random() < 0.15 ? (dx > 0 ? 1 : -1) : 0;
+      break;
     case "brawler":
-      if (dist > 12) return dx > 0 ? 1 : -1;
-      if (dist < 6) return dx > 0 ? -1 : 1;
-      return dx > 0 ? 1 : -1;
+      if (dist > 12) desired = dx > 0 ? 1 : -1;
+      else if (dist < 6) desired = dx > 0 ? -1 : 1;
+      else desired = dx > 0 ? 1 : -1;
+      break;
     case "sniper":
-      if (dist < 25) return dx > 0 ? -1 : 1;
-      return Math.random() < 0.2 ? (dx > 0 ? 1 : -1) : 0;
+      if (dist < 25) desired = dx > 0 ? -1 : 1;
+      else desired = Math.random() < 0.2 ? (dx > 0 ? 1 : -1) : 0;
+      break;
     case "reckless":
-      if (dist > 14) return dx > 0 ? 1 : -1;
-      return Math.random() < 0.5 ? (dx > 0 ? 1 : -1) : 0;
+      if (dist > 14) desired = dx > 0 ? 1 : -1;
+      else desired = Math.random() < 0.5 ? (dx > 0 ? 1 : -1) : 0;
+      break;
     case "chaotic":
-      return ([-1, 0, 0, 1] as const)[Math.floor(Math.random() * 4)]!;
+      desired = ([-1, 0, 0, 1] as const)[Math.floor(Math.random() * 4)]!;
+      break;
     case "artillery":
     default:
-      if (dist > 22) return dx > 0 ? 1 : -1;
-      if (dist < 10) return dx > 0 ? -1 : 1;
-      return 0;
+      if (dist > 22) desired = dx > 0 ? 1 : -1;
+      else if (dist < 10) desired = dx > 0 ? -1 : 1;
+      else desired = 0;
+      break;
   }
+
+  if (desired === 0) return 0;
+
+  // Probe a few units ahead for void / island edge
+  const step = desired * (2.5 + skill * 2);
+  const probeX = self.x + step;
+  const safe = isSafeStep(world, probeX, midZ);
+  // Also check intermediate point
+  const midSafe = isSafeStep(world, self.x + desired * 1.2, midZ);
+
+  if (!safe || !midSafe) {
+    // Reckless / chaotic may still risk it on easy skill
+    if (persona === "reckless" && skill < 0.5 && Math.random() < 0.35) {
+      return desired;
+    }
+    // Try reverse if that looks safer (retreat from cliff)
+    const reverse: -1 | 0 | 1 = desired === 1 ? -1 : 1;
+    if (isSafeStep(world, self.x + reverse * 2.5, midZ)) {
+      // Only reverse if we're near a void underfoot or target is away
+      if (
+        world.isVoidColumn(self.x + desired * 1.5, midZ) ||
+        world.sampleGroundY(self.x + desired * 1.5, midZ) < 0
+      ) {
+        return reverse;
+      }
+    }
+    // Stand still rather than walk into the void
+    return 0;
+  }
+
+  // High skill: if current footing is thin, prefer not advancing further out
+  if (skill > 0.7) {
+    const under = world.sampleGroundY(self.x, midZ);
+    const ahead = world.sampleGroundY(self.x + desired * 3, midZ);
+    if (under >= 0 && ahead >= 0 && Math.abs(ahead - under) > 10) {
+      // Big drop ahead — snipers/campers hold; brawlers still push sometimes
+      if (persona === "sniper" || persona === "camper" || persona === "artillery") {
+        return 0;
+      }
+    }
+  }
+
+  return desired;
 }
 
 function pickWeapon(
   self: PlayerState,
   persona: BotPersona,
+  skill: number,
 ): "primary" | "secondary" {
-  // Primary always available (Peashooter fallback on server)
   const canSecondary =
     !!self.loadout?.secondary && (self.secondaryAmmo ?? 0) > 0;
 
-  // Never request an empty magazine
   if (!canSecondary) return "primary";
 
   const sec = self.loadout!.secondary!;
@@ -120,10 +208,9 @@ function pickWeapon(
   if (sec.secondaryOnly || sec.id === "nuke_lite") {
     const hpRatio = self.hp / Math.max(1, self.loadout!.chassis.maxHp);
     if (persona === "reckless") return Math.random() < 0.65 ? "secondary" : "primary";
-    if (hpRatio < 0.4) return Math.random() < 0.7 ? "secondary" : "primary";
-    return Math.random() < 0.25 ? "secondary" : "primary";
+    if (hpRatio < 0.4) return Math.random() < 0.7 + skill * 0.15 ? "secondary" : "primary";
+    return Math.random() < 0.2 + skill * 0.1 ? "secondary" : "primary";
   }
-  // Prefer secondary when it matches persona fantasy
   if (persona === "reckless" && sec.blastRadius >= 4) {
     return Math.random() < 0.55 ? "secondary" : "primary";
   }
@@ -133,7 +220,7 @@ function pickWeapon(
   if (persona === "chaotic") {
     return Math.random() < 0.4 ? "secondary" : "primary";
   }
-  return Math.random() < 0.2 ? "secondary" : "primary";
+  return Math.random() < 0.15 + skill * 0.12 ? "secondary" : "primary";
 }
 
 function findAim(
@@ -156,13 +243,13 @@ function findAim(
     z: Math.floor(world.depth / 2) + 0.5,
   };
 
-  // Persona aim preferences
   let angleMin = 12;
   let angleMax = 168;
   let powerMin = 18;
   let powerMax = 100;
-  let stepA = 5;
-  let stepP = 5;
+  // Finer grid at higher skill
+  let stepA = skill > 0.75 ? 3 : skill > 0.45 ? 5 : 8;
+  let stepP = skill > 0.75 ? 3 : skill > 0.45 ? 5 : 10;
 
   switch (persona) {
     case "artillery":
@@ -177,8 +264,8 @@ function findAim(
       powerMax = 85;
       break;
     case "sniper":
-      stepA = 3;
-      stepP = 3;
+      stepA = Math.min(stepA, 3);
+      stepP = Math.min(stepP, 3);
       break;
     case "reckless":
       powerMin = 55;
@@ -196,7 +283,6 @@ function findAim(
 
   let best = { angle: 45, power: 50, score: Infinity };
 
-  // Homing: aim roughly at target — guidance steers the rest
   if (weapon.trajectory === "homing") {
     const dx = target.x - self.x;
     const dy = target.y - self.y;
@@ -231,14 +317,11 @@ function findAim(
       if (!last) continue;
       let dist = Math.hypot(last.x - target.x, last.y - target.y);
 
-      // Prefer not to detonate on ourselves (except reckless)
       const selfDist = Math.hypot(last.x - self.x, last.y - self.y);
       if (persona !== "reckless" && selfDist < weapon.blastRadius + 2) {
         dist += 40;
       }
-      // Reckless likes big power
       if (persona === "reckless") dist -= power * 0.02;
-      // Artillery likes higher arcs
       if (persona === "artillery" && angle > 50 && angle < 130) dist -= 1.5;
 
       const score = dist + Math.abs(power - 55) * (0.03 * (1 - skill));
@@ -248,7 +331,6 @@ function findAim(
     }
   }
 
-  // Skill: lower skill → more aim noise
   const noiseA = (1 - skill) * 14 + (persona === "chaotic" ? 10 : 0);
   const noiseP = (1 - skill) * 18 + (persona === "chaotic" ? 12 : 0);
 
@@ -258,22 +340,40 @@ function findAim(
   };
 }
 
-/** Thinking delay ms — snipers ponder, reckless snaps. */
-export function botThinkDelayMs(persona: BotPersona | undefined): number {
+/** Thinking delay ms — snipers ponder, reckless snaps; difficulty scales. */
+export function botThinkDelayMs(
+  persona: BotPersona | undefined,
+  difficulty: BotDifficulty = "normal",
+): number {
+  let base: number;
   switch (persona) {
     case "sniper":
-      return 1200 + Math.random() * 1000;
+      base = 1200 + Math.random() * 1000;
+      break;
     case "camper":
-      return 1000 + Math.random() * 900;
+      base = 1000 + Math.random() * 900;
+      break;
     case "artillery":
-      return 900 + Math.random() * 800;
+      base = 900 + Math.random() * 800;
+      break;
     case "reckless":
-      return 400 + Math.random() * 400;
+      base = 400 + Math.random() * 400;
+      break;
     case "chaotic":
-      return 300 + Math.random() * 1200;
+      base = 300 + Math.random() * 1200;
+      break;
     case "brawler":
-      return 500 + Math.random() * 600;
+      base = 500 + Math.random() * 600;
+      break;
     default:
-      return 700 + Math.random() * 900;
+      base = 700 + Math.random() * 900;
+  }
+  switch (difficulty) {
+    case "easy":
+      return base * 0.75 + 200;
+    case "hard":
+      return base * 0.55 + 150;
+    default:
+      return base;
   }
 }

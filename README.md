@@ -23,8 +23,12 @@ The production build serves the **client and Colyseus server on the same origin*
 - **Budget loadouts** — procedural tanks/weapons under a point cap; weapon catalog testable in Sandbox
 - **Lobbies** — public rooms, private join codes, unique bot pilots, ready meter
 - **Character select** — each pilot picks from **3 tank kits** (chassis + primary + alt) before ready
-- **Leaderboard** — post-match rankings in SQLite
-- **Sandbox** — keys 1–7 to try every weapon behavior (single, lob, cluster, drill, bounce, triple, nuke)
+- **Leaderboard** — post-match rankings in SQLite (mount a volume + `DATA_DIR` to keep them)
+- **Sudden death** — after ~16 turns, one random hazard: rising waters, buried exploding mountain, hostile UFO, or mega hurricane with debris
+- **Reconnect** — disconnect holds your seat ~75s; resume from the menu with the same callsign
+- **Bot difficulty** — Easy / Normal / Hard (menu settings); bots avoid void edges
+- **Mute** — menu toggle or press **M**
+- **Sandbox** — keys 1–8 to try every weapon behavior (single, lob, cluster, drill, bounce, triple, nuke)
 
 ## Stack
 
@@ -115,13 +119,21 @@ One Railway service runs **Colyseus + Express + the built Vite client** on the s
 |----------|----------|--------|
 | `PORT` | Auto | Railway injects this |
 | `NODE_ENV` | Optional | Platform often sets `production` |
+| `DATA_DIR` | For persistence | Mount a volume (e.g. `/data`) and set `DATA_DIR=/data`. SQLite path: `$DATA_DIR/gunmetal-barrage.db` |
 | `VITE_SERVER_URL` | No | Leave unset for same-origin `wss://` |
 
 See `.env.example`. Do not bake secrets into the Vite client.
 
+### Persistent leaderboard (Railway volume)
+
+1. Service → **Volumes** → mount a volume at `/data`.
+2. Variables → `DATA_DIR=/data`.
+3. Redeploy. `/health` reports `dataDir` and `dbPath`.
+
+Without a volume, the DB lives under the container cwd (`./data`) and is wiped on redeploy.
+
 ### Notes
 
-- **SQLite** (`better-sqlite3`) is on the container disk — leaderboard data is ephemeral unless you attach a volume.
 - Shared hosting without a long-running Node process will not run multiplayer; a VPS with Node 20+ works if you reverse-proxy WebSockets.
 
 ## License

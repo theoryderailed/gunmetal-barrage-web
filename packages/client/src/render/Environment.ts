@@ -35,6 +35,8 @@ export class Environment {
   private time = 0;
   private hemi: THREE.HemisphereLight | null = null;
   private sun: THREE.DirectionalLight | null = null;
+  /** Extra debris density for hurricane sudden death (0 = normal). */
+  private hazardIntensity = 0;
 
   constructor(scene: THREE.Scene) {
     // Gradient sky (shader plane behind the world)
@@ -209,6 +211,11 @@ export class Environment {
     this.wind = wind;
   }
 
+  /** Hurricane / storm visual multiplier for wind debris. */
+  setHazardIntensity(intensity: number): void {
+    this.hazardIntensity = Math.max(0, intensity);
+  }
+
   update(dt: number): void {
     this.time += dt;
     this.skyMat.uniforms.time.value = this.time;
@@ -235,10 +242,14 @@ export class Environment {
   /** Spawn / refresh wind debris so direction of wind is readable. */
   private updateDebris(dt: number): void {
     // Always show a stream (calm wind still drifts); more particles when stronger
-    const strength = Math.max(0.2, Math.abs(this.wind));
-    const dir = this.wind < -0.02 ? -1 : 1;
-    const targetCount =
+    const strength = Math.max(0.2, Math.abs(this.wind)) + this.hazardIntensity * 0.85;
+    const dir = this.wind < -0.02 ? -1 : this.wind > 0.02 ? 1 : 1;
+    const baseCount =
       strength < 0.4 ? 52 : strength < 0.85 ? 78 : strength < 1.35 ? 100 : 128;
+    const targetCount = Math.min(
+      220,
+      Math.floor(baseCount + this.hazardIntensity * 70),
+    );
 
     while (this.debris.length < targetCount) {
       this.spawnDebris(dir, true);

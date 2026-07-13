@@ -9,4 +9,5 @@ export * from "./procgen/identity.js";
 export * from "./physics/ballistics.js";
 export * from "./physics/weapons.js";
 export * from "./physics/movement.js";
+export * from "./sim/suddenDeath.js";
 export * from "./rules.js";

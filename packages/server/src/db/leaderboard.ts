@@ -3,14 +3,30 @@ import fs from "node:fs";
 import path from "node:path";
 import type { LeaderboardEntry, MatchResultEntry } from "@gunmetal-barrage/shared";
 
-const DATA_DIR = path.resolve(process.cwd(), "data");
+/**
+ * Persist leaderboard on a Railway volume by setting:
+ *   DATA_DIR=/data   (mount volume at /data)
+ * Falls back to ./data under the process cwd.
+ */
+const DATA_DIR = path.resolve(
+  process.env.DATA_DIR ?? process.env.GMB_DATA_DIR ?? path.join(process.cwd(), "data"),
+);
 const DB_PATH = path.join(DATA_DIR, "gunmetal-barrage.db");
 
 let db: Database.Database | null = null;
 
+export function getDataDir(): string {
+  return DATA_DIR;
+}
+
+export function getDbPath(): string {
+  return DB_PATH;
+}
+
 export function getDb(): Database.Database {
   if (db) return db;
   fs.mkdirSync(DATA_DIR, { recursive: true });
+  console.log(`[db] leaderboard sqlite → ${DB_PATH}`);
   db = new Database(DB_PATH);
   db.exec(`
     CREATE TABLE IF NOT EXISTS players (

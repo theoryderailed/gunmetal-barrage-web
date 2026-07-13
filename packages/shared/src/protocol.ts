@@ -24,8 +24,11 @@ export const ServerMsg = {
   PlayerEliminated: "player_eliminated",
   TurnEnd: "turn_end",
   MatchEnd: "match_end",
+  SuddenDeath: "sudden_death",
   Chat: "chat",
   Error: "error",
+  /** Full resync after reconnect mid-match */
+  Reconnected: "reconnected",
 } as const;
 
 export type ClientMsgType = (typeof ClientMsg)[keyof typeof ClientMsg];
@@ -65,8 +68,34 @@ export interface TurnStartPayload {
   wind: number;
   timeSec: number;
   phase: import("./types.js").TurnPhase;
+  suddenDeath?: import("./types.js").SuddenDeathState | null;
 }
 
 export interface MatchEndPayload {
   rankings: import("./types.js").MatchResultEntry[];
+}
+
+export interface SuddenDeathPayload {
+  state: import("./types.js").SuddenDeathState;
+  /** Optional terrain digs from this SD tick */
+  terrainOps?: import("./types.js").TerrainOp[];
+  damages?: {
+    targetId: string;
+    amount: number;
+    sourceId: string;
+  }[];
+  eliminated?: { id: string; reason: string }[];
+  message: string;
+}
+
+export interface ReconnectedPayload {
+  matchSeed: number;
+  config: import("./types.js").MatchConfig;
+  players: import("./types.js").PlayerState[];
+  wind: number;
+  turnIndex: number;
+  currentPlayerId: string | null;
+  phase: import("./types.js").TurnPhase;
+  status: string;
+  suddenDeath: import("./types.js").SuddenDeathState | null;
 }

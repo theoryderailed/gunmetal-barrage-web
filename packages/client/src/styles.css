@@ -2311,3 +2311,91 @@ button:focus-visible {
 .hidden {
   display: none !important;
 }
+
+/* ── Menu settings ───────────────────────────────────────── */
+.menu-card-settings {
+  grid-column: 1 / -1;
+}
+
+.settings-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 16px;
+  margin-top: 8px;
+}
+
+.settings-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 15px;
+  color: var(--text);
+}
+
+.settings-toggle input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+}
+
+.settings-label {
+  font-family: "Press Start 2P", monospace;
+  font-size: 7px;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+}
+
+.diff-pills {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.diff-pill {
+  font-family: "Press Start 2P", monospace;
+  font-size: 7px;
+  padding: 8px 10px;
+  border: 2px solid var(--panel-border);
+  background: #12161f;
+  color: var(--muted);
+  cursor: pointer;
+  box-shadow: 2px 2px 0 #000;
+}
+
+.diff-pill:hover {
+  color: var(--text);
+  border-color: var(--accent-2);
+}
+
+.diff-pill.active {
+  color: #0a0c10;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.btn-resume {
+  margin-top: 8px;
+  background: linear-gradient(180deg, #3d8f5a, #2a6b42) !important;
+  border-color: #6dff8a !important;
+}
+
+/* Sudden death banner chip on HUD toast uses notifications; optional dock tint */
+.sd-banner {
+  position: fixed;
+  top: 12%;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 40;
+  pointer-events: none;
+  font-family: "Press Start 2P", monospace;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: #fff8e0;
+  text-shadow: 0 0 12px #ff6b2d, 3px 3px 0 #000;
+  padding: 12px 18px;
+  border: 3px solid var(--accent);
+  background: rgba(20, 10, 8, 0.88);
+  box-shadow: 4px 4px 0 #000;
+  animation: panel-in 0.3s ease-out;
+}
